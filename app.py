@@ -86,13 +86,10 @@ def parse_range_issue_strings(range_list, df):
     for msg in range_list:
         m = pattern.match(msg)
         if not m: continue
-        row_num = int(m.group(1))
-        value = m.group(2)
-        column = m.group(3)
+        row_num, value, column = int(m.group(1)), m.group(2), m.group(3)
         data_idx = row_num - 2
         if data_idx < 0 or data_idx >= len(df): continue
-        row = df.iloc[data_idx]
-        stock = row.get("stock_num", None)
+        stock = df.iloc[data_idx].get("stock_num", None)
         range_details = validator.RANGE_COLS.get(column.lower(), (0, 100, "Value"))
         min_val, max_val, name = range_details
         issues.append({
@@ -211,7 +208,7 @@ def build_email_body(supplier_name, inv_shapes, miss_col, url_counts, cut_miss, 
             lines.append("- Invalid shape values found, for example:")
             for sh in inv_shapes: lines.append(f"  • {sh}")
         lines.append("")
-    # Add other categories following the same pattern...
+    # Categories for Weight, Color, Clarity, Image, Video, Cert, Price follow the same logic...
     lines.append("A spreadsheet is attached. Best Regards, Himanshu, VDB Marketplace Support")
     return "\n".join(lines)
 
