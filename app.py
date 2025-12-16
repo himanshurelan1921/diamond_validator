@@ -5,17 +5,16 @@ import re
 import math
 from collections import Counter
 import validator  # our backend module
-
+import os
 
 # ------------------------------------------------------------
 # STREAMLIT SETUP
 # ------------------------------------------------------------
 
 st.set_page_config(page_title="Diamond Inventory Validator", layout="wide")
-st.title("💎 Diamond & Lab-Grown Inventory Validator")
+st.title("Diamond & Lab-Grown Inventory Validator")
 st.markdown("""
-Upload your **headers.xlsx** (rules file)  
-and your **supplier inventory file** to validate and generate a client-ready report.
+Upload your **supplier inventory file** to validate against the internal rule set.
 """)
 
 
@@ -32,10 +31,21 @@ def find_canonical_col(df, candidates):
             return c
     return None
 
+def sanitize_sheet_name(name):
+    """
+    Removes characters invalid for Excel sheet names.
+    Invalid characters: \ / ? * [ ] :
+    Max length: 31 characters.
+    """
+    name = re.sub(r'[\\/?*\[\]:]', '', name)
+    return name[:31]
 
 def build_mandatory_issues(df):
-    """Return structured list of missing mandatory field issues."""
+    """
+    Return structured list of missing mandatory field issues AND a count of missing columns.
+    """
     issues = []
+    missing_by_col = Counter()
     mandatory_cols = getattr(validator, "MANDATORY_COLS", [])
     for idx, row in df.iterrows():
         stock = row.get("stock_num", None)
@@ -44,6 +54,7 @@ def build_mandatory_issues(df):
                 v_norm = validator.normalize_value_str(row[col])
                 if v_norm is None:
                     issues.append({
+                        "Category": "Missing Mandatory",
                         "Stock No.": stock,
                         "Issue Type": "Missing Value",
                         "Column": col,
@@ -51,7 +62,8 @@ def build_mandatory_issues(df):
                         "Details": "Missing mandatory field",
                         "Row": idx + 2,
                     })
-    return issues
+                    missing_by_col[col] += 1
+    return issues, missing_by_col
 
 
 def parse_invalid_value_strings(invalid_list, df):
@@ -81,6 +93,7 @@ def parse_invalid_value_strings(invalid_list, df):
         stock = row.get("stock_num", None)
 
         issues.append({
+            "Category": "Invalid Value",
             "Stock No.": stock,
             "Issue Type": "Invalid Value",
             "Column": column,
@@ -101,6 +114,7 @@ def parse_url_issue_strings(url_list, df):
       "Row 2: image_url_1 → NOT WORKING"
       "Row 3: cert_url_1 → NOT PROVIDED"
     into structured records and counts.
+    NOTE: URL checks for cert_url_1 are ignored in validator.py now.
     """
     issues = []
     pattern = re.compile(r"Row (\d+): ([^ ]+) → (.+)")
@@ -119,6 +133,11 @@ def parse_url_issue_strings(url_list, df):
         col = m.group(2)
         status = m.group(3)
 
+        # Skip cert_url_1 entries from the URL checker string list,
+        # as we rely on the PDF format check now.
+        if col == "cert_url_1" and "NOT PROVIDED" not in status:
+            continue
+
         data_idx = row_num - 2
         if data_idx < 0 or data_idx >= len(df):
             continue
@@ -132,6 +151,7 @@ def parse_url_issue_strings(url_list, df):
             issue_type = "URL Error"
 
         issues.append({
+            "Category": "URL Issue",
             "Stock No.": stock,
             "Issue Type": issue_type,
             "Column": col,
@@ -152,9 +172,10 @@ def parse_url_issue_strings(url_list, df):
             else:
                 bad_video += 1
         elif col == "cert_url_1":
-            if "NOT WORKING" in status:
-                bad_cert += 1
-
+            # Only count missing certs here; bad certs (non-PDF) counted in Step 5
+            if "NOT PROVIDED" in status:
+                bad_cert += 1 
+            
     counts = {
         "missing_image": missing_image,
         "missing_video": missing_video,
@@ -183,6 +204,7 @@ def find_missing_cut_grade(df):
         if v_norm is None:
             count += 1
             issues.append({
+                "Category": "Missing Value",
                 "Stock No.": stock,
                 "Issue Type": "Missing Value",
                 "Column": col,
@@ -214,6 +236,7 @@ def find_non_pdf_cert_urls(df):
         if ".pdf" not in url_lower:
             count += 1
             issues.append({
+                "Category": "URL Issue",
                 "Stock No.": stock,
                 "Issue Type": "Cert URL Format",
                 "Column": "cert_url_1",
@@ -270,6 +293,7 @@ def build_price_mismatch_issues(df):
         if abs(expected - tsp) > 0.01:
             count += 1
             issues.append({
+                "Category": "Price Issue",
                 "Stock No.": stock,
                 "Issue Type": "Price Mismatch",
                 "Column": tsp_col,
@@ -283,16 +307,71 @@ def build_price_mismatch_issues(df):
 
 def build_excel_report(structured_issues):
     """
-    Build an Excel file in memory from structured issues.
+    Build an Excel file in memory, writing issues to separate sheets
+    based on the affected canonical column/category.
     """
-    if not structured_issues:
-        df_report = pd.DataFrame(columns=["Stock No.", "Issue Type", "Column", "Value", "Details", "Row"])
-    else:
-        df_report = pd.DataFrame(structured_issues)
+    # Define sections and their sheets based on canonical column or issue type
+    section_map = {
+        "shape": "1. Shape",
+        "weight": "2. Weight",
+        "carat": "2. Weight",
+        "carat_weight": "2. Weight",
+        "color": "3. Color",
+        "clarity": "4. Clarity",
+        "image_url_1": "5. Image URL",
+        "video_url_1": "6. Video URL",
+        "cert_url_1": "7. Certificate URL",
+        "price_per_carat": "8. Price",
+        "total_sales_price": "8. Price",
+    }
+    # Catch-all sheet for other issues (e.g., Missing Stock_num, Unknown Header, general errors)
+    other_sheet = "9. Other Issues / Cut Grade"
+    
+    # Organize issues by sheet name
+    issues_by_sheet = {}
+    
+    # Initialize all possible sheets to ensure they are sorted correctly, even if empty
+    all_sheet_names = set(section_map.values())
+    all_sheet_names.add(other_sheet)
+    for name in all_sheet_names:
+        issues_by_sheet[name] = []
+        
+    for issue in structured_issues:
+        column = issue.get("Column", "").lower()
+        sheet_name = section_map.get(column, other_sheet)
+        
+        # Special handling for Price Mismatch and Cert URL Format
+        if issue["Issue Type"] == "Price Mismatch":
+             sheet_name = "8. Price"
+        elif issue["Issue Type"] == "Cert URL Format":
+             sheet_name = "7. Certificate URL"
+        elif issue["Column"] in ["cut", "cut_grade"]:
+            sheet_name = other_sheet
 
+        issues_by_sheet[sheet_name].append(issue)
+
+    # Write to Excel
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df_report.to_excel(writer, sheet_name="Validation Report", index=False)
+        # Sort sheets by name (e.g., 1., 2., 3.)
+        for sheet_name in sorted(issues_by_sheet.keys()):
+            
+            # --- APPLY SANITIZATION HERE ---
+            safe_sheet_name = sanitize_sheet_name(sheet_name)
+            # --- END SANITIZATION ---
+            
+            # Only write sheets that have data
+            if issues_by_sheet[sheet_name]:
+                # Remove the temporary 'Category' column before writing
+                df_report = pd.DataFrame(issues_by_sheet[sheet_name]).drop(columns=["Category"], errors='ignore')
+                df_report.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+            
+        # If no issues, create a single "No Issues" sheet
+        if not structured_issues:
+            df_empty = pd.DataFrame(columns=["Stock No.", "Issue Type", "Column", "Value", "Details", "Row"])
+            df_empty.to_excel(writer, sheet_name="No Issues Found", index=False)
+                
+    
     buffer.seek(0)
     return buffer
 
@@ -309,9 +388,8 @@ def build_email_body(
 ):
     """
     Build the final email text based on actual issues.
-    Only mention sections that have problems.
-    Focus on:
-      Shape, Weight, Color, Clarity, Price, Image, Video, Certificate.
+    (2nd Change: No emojis/icons, No horizontal rule)
+    (3rd Change: Removed redundant 'refer to sheet' text)
     """
     lines = []
 
@@ -322,18 +400,20 @@ def build_email_body(
     lines.append("During a routine validation of your inventory on the VDB Marketplace, we identified a few issues that need your attention. Please find the details below:")
     lines.append("")
 
-    # ----- Shape -----
-    if invalid_shape_values or missing_by_col.get("shape"):
-        lines.append("Shape")
+
+    # --- Shape (1. Shape) ---
+    if invalid_shape_values or missing_by_col.get("shape") or invalid_by_col.get("shape"):
+        lines.append("1. Shape")
         if missing_by_col.get("shape"):
             lines.append(f"- Shape is missing for {missing_by_col['shape']} item(s).")
         if invalid_shape_values:
-            lines.append("- We found shape values that do not match VDB’s standardised shape list, for example:")
+            lines.append("- We found invalid shape values that do not match VDB’s standardised shape list, for example:")
             for sh in invalid_shape_values:
                 lines.append(f"  • {sh}")
-        lines.append("Please refer to the attached sheet for affected stock numbers.")
         lines.append("")
 
+
+    # --- Weight (2. Weight) ---
     # Determine weight column label for email (if any)
     weight_col = None
     for cand in ["carat", "weight", "carat_weight"]:
@@ -341,35 +421,71 @@ def build_email_body(
             weight_col = cand
             break
 
-    # ----- Weight -----
     if weight_col and (missing_by_col.get(weight_col) or invalid_by_col.get(weight_col)):
-        lines.append("Weight")
+        lines.append("2. Weight")
         if missing_by_col.get(weight_col):
-            lines.append(f"- Weight is missing for {missing_by_col[weight_col]} item(s).")
+            lines.append(f"- Weight ({weight_col}) is missing for {missing_by_col[weight_col]} item(s).")
         if invalid_by_col.get(weight_col):
-            lines.append(f"- Weight has invalid values for {invalid_by_col[weight_col]} item(s).")
-        lines.append("Affected stock numbers are listed in the attached sheet.")
+            lines.append(f"- Weight ({weight_col}) has invalid values for {invalid_by_col[weight_col]} item(s).")
         lines.append("")
 
-    # ----- Color -----
+
+    # --- Color (3. Color) ---
     if missing_by_col.get("color") or invalid_by_col.get("color"):
-        lines.append("Color")
+        lines.append("3. Color")
         if missing_by_col.get("color"):
             lines.append(f"- Color is missing for {missing_by_col['color']} item(s).")
         if invalid_by_col.get("color"):
             lines.append(f"- Color has invalid values for {invalid_by_col['color']} item(s).")
         lines.append("")
 
-    # ----- Clarity -----
+
+    # --- Clarity (4. Clarity) ---
     if missing_by_col.get("clarity") or invalid_by_col.get("clarity"):
-        lines.append("Clarity")
+        lines.append("4. Clarity")
         if missing_by_col.get("clarity"):
             lines.append(f"- Clarity is missing for {missing_by_col['clarity']} item(s).")
         if invalid_by_col.get("clarity"):
             lines.append(f"- Clarity has invalid values for {invalid_by_col['clarity']} item(s).")
         lines.append("")
 
-    # ----- Price (PPC / TSP) -----
+
+    # --- Image (5. Image URL) ---
+    missing_image = missing_by_col.get("image_url_1", 0) + url_counts.get("missing_image", 0)
+    if missing_image or url_counts.get("bad_image", 0):
+        lines.append("5. Image URLs")
+        if missing_image:
+            lines.append(f"- Image URLs are missing for {missing_image} item(s).")
+        if url_counts.get("bad_image", 0):
+            lines.append(f"- {url_counts['bad_image']} image URL(s) are not working (HTTP errors).")
+        lines.append("")
+
+    # --- Video (6. Video URL) ---
+    missing_video = missing_by_col.get("video_url_1", 0) + url_counts.get("missing_video", 0)
+    if missing_video or url_counts.get("bad_video", 0):
+        lines.append("6. Video URLs")
+        if missing_video:
+            lines.append(f"- Video URLs are missing for {missing_video} item(s).")
+        if url_counts.get("bad_video", 0):
+            lines.append(f"- {url_counts['bad_video']} video URL(s) are not working (HTTP errors).")
+        lines.append("")
+
+
+    # --- Certificate (7. Certificate URL) ---
+    cert_issue_present = (
+        missing_by_col.get("cert_url_1", 0)
+        or non_pdf_cert_count
+        or url_counts.get("bad_cert", 0)
+    )
+    if cert_issue_present:
+        lines.append("7. Certificate URLs")
+        if missing_by_col.get("cert_url_1", 0) + url_counts.get("bad_cert", 0) > 0:
+             lines.append(f"- Certificate URLs are missing for {missing_by_col['cert_url_1'] + url_counts['bad_cert']} item(s).")
+        if non_pdf_cert_count:
+            lines.append(f"- {non_pdf_cert_count} certificate URL(s) do not appear to be direct PDF links. Please use direct PDF links (e.g., `https://.../LG700531186.pdf`).")
+        lines.append("")
+
+    # --- Price (8. Price) ---
     price_issue_present = (
         missing_by_col.get("price_per_carat")
         or missing_by_col.get("total_sales_price")
@@ -379,7 +495,7 @@ def build_email_body(
     )
 
     if price_issue_present:
-        lines.append("Price")
+        lines.append("8. Price")
         if missing_by_col.get("price_per_carat"):
             lines.append(f"- Price per carat is missing for {missing_by_col['price_per_carat']} item(s).")
         if missing_by_col.get("total_sales_price"):
@@ -389,52 +505,13 @@ def build_email_body(
         if invalid_by_col.get("total_sales_price"):
             lines.append(f"- Total sales price has invalid values for {invalid_by_col['total_sales_price']} item(s).")
         if price_mismatch_count:
-            lines.append(f"- For {price_mismatch_count} item(s), Total Sales Price does not match (Carat × Price Per Carat).")
-        lines.append("Please review and correct the pricing for the affected stock numbers listed in the attached sheet.")
+            lines.append(f"- For {price_mismatch_count} item(s), Total Sales Price does not match (Carat x Price Per Carat).")
         lines.append("")
 
-    # ----- Image / Video / Certificate URLs -----
-    missing_image = missing_by_col.get("image_url_1", 0) + url_counts.get("missing_image", 0)
-    missing_video = missing_by_col.get("video_url_1", 0) + url_counts.get("missing_video", 0)
 
-    # Image
-    if missing_image or url_counts.get("bad_image", 0):
-        lines.append("Image URLs")
-        if missing_image:
-            lines.append(f"- Image URLs are missing for {missing_image} item(s).")
-        if url_counts.get("bad_image", 0):
-            lines.append(f"- {url_counts['bad_image']} image URL(s) are not working.")
-        lines.append("")
-
-    # Video
-    if missing_video or url_counts.get("bad_video", 0):
-        lines.append("Video URLs")
-        if missing_video:
-            lines.append(f"- Video URLs are missing for {missing_video} item(s).")
-        if url_counts.get("bad_video", 0):
-            lines.append(f"- {url_counts['bad_video']} video URL(s) are not working.")
-        lines.append("")
-
-    # Certificate
-    cert_issue_present = (
-        missing_by_col.get("cert_url_1", 0)
-        or url_counts.get("bad_cert", 0)
-        or non_pdf_cert_count
-    )
-    if cert_issue_present:
-        lines.append("Certificate URLs")
-        if missing_by_col.get("cert_url_1", 0):
-            lines.append(f"- Certificate URLs are missing for {missing_by_col['cert_url_1']} item(s).")
-        if url_counts.get("bad_cert", 0):
-            lines.append(f"- {url_counts['bad_cert']} certificate URL(s) are not currently working (HTTP errors).")
-        if non_pdf_cert_count:
-            lines.append(f"- {non_pdf_cert_count} certificate URL(s) do not appear to be direct PDF links.")
-        lines.append("Kindly update them with secure, direct PDF links where possible. For example: https://api.igi.org/viewpdf.php?r=LG700531186")
-        lines.append("")
-
-    # Cut grade (optional, not in main 8 but still useful)
+    # --- Cut Grade (9. Other Issues) ---
     if cut_missing_count:
-        lines.append("Cut Grade")
+        lines.append("9. Other Issues (Cut Grade)")
         lines.append(f"- Cut grade information is missing for {cut_missing_count} item(s).")
         lines.append("")
 
@@ -454,7 +531,7 @@ def build_email_body(
 # FILE UPLOAD UI
 # ------------------------------------------------------------
 
-rules_file = st.file_uploader("Upload headers.xlsx (rules file)", type=["xlsx"])
+# (4th Change: Removed rules_file upload)
 supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
 supplier_name = st.text_input("Supplier Name (for email)", value="Supplier")
 
@@ -467,19 +544,29 @@ start_btn = st.button("Run Validation")
 
 if start_btn:
 
-    if not rules_file or not supplier_file:
-        st.error("⚠ Please upload BOTH files.")
+    if not supplier_file:
+        st.error("⚠ Please upload the Supplier Inventory file.")
         st.stop()
 
+    # (4th Change: Loading rules locally)
+    rules_path = "headers.xlsx"
+    if not os.path.exists(rules_path):
+        st.error(f"Configuration error: The rules file ({rules_path}) was not found in the application directory.")
+        st.stop()
+        
     # Load rules
     st.info("📘 Loading rules…")
-    rules_bytes = rules_file.read()
-    header_map, canonical_set = validator.load_header_rules(io.BytesIO(rules_bytes))
-    value_rules = validator.load_value_rules(io.BytesIO(rules_bytes))
-    st.success("Rules loaded successfully.")
-
+    try:
+        header_map, canonical_set = validator.load_header_rules(rules_path)
+        value_rules = validator.load_value_rules(rules_path)
+        st.success("Rules loaded successfully.")
+    except Exception as e:
+        st.error(f"Failed to load rules from {rules_path}. Ensure it is a valid Excel file with 'Columns' and 'Values' sheets. Error: {e}")
+        st.stop()
+    
     # Load supplier file
     st.info("📄 Loading supplier inventory…")
+    # ... (rest of file loading remains the same)
     supplier_bytes = supplier_file.read()
     ext = supplier_file.name.split(".")[-1].lower()
 
@@ -498,11 +585,10 @@ if start_btn:
     df, unknown_headers = validator.normalize_headers(df, header_map)
     progress.progress(15)
 
-    # STEP 2 — Mandatory fields (string list for display)
+    # STEP 2 — Mandatory fields
     status.text("Checking mandatory fields…")
-    missing_strings = validator.check_mandatory(df)
-    # structured mandatory issues for report & email
-    mandatory_issues = build_mandatory_issues(df)
+    missing_strings = validator.check_mandatory(df) # Raw string list for CLI output
+    mandatory_issues, missing_by_col = build_mandatory_issues(df) # Structured issues & counts
     progress.progress(35)
 
     # STEP 3 — Value checks
@@ -520,7 +606,8 @@ if start_btn:
     # STEP 5 — Special: cut grade, cert format, price mismatches
     status.text("Checking cut grade, certificate URL format and price consistency…")
     cut_issues, cut_missing_count = find_missing_cut_grade(df)
-    cert_format_issues, non_pdf_cert_count = find_non_pdf_cert_urls(df)
+    # The URL status check for certs is implicitly handled by the change in validator.py
+    cert_format_issues, non_pdf_cert_count = find_non_pdf_cert_urls(df) 
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
     progress.progress(100)
 
@@ -543,11 +630,14 @@ if start_btn:
         st.error("❌ Invalid Values Found")
         st.write(invalid_strings)
 
-    if url_strings:
-        st.error("❌ URL Issues")
-        st.write(url_strings)
+    # Filter out cert_url_1 URL errors if they are not just 'NOT PROVIDED'
+    filtered_url_strings = [s for s in url_strings if 'cert_url_1' not in s or 'NOT PROVIDED' in s]
+    
+    if filtered_url_strings:
+        st.error("❌ URL Issues (Image/Video)")
+        st.write(filtered_url_strings)
     else:
-        st.success("All URLs are working!")
+        st.success("All Image and Video URLs are working or missing.")
 
     # --------------------------------------------------------
     # STRUCTURED ISSUES & EXCEL REPORT
@@ -574,12 +664,7 @@ if start_btn:
     # EMAIL SUMMARY
     # --------------------------------------------------------
     st.subheader("📧 Email Summary (copy & paste)")
-
-    # aggregate counts per column
-    missing_by_col = Counter()
-    for i in mandatory_issues:
-        missing_by_col[i["Column"]] += 1
-
+    
     invalid_by_col = Counter()
     for i in invalid_issues:
         invalid_by_col[i["Column"]] += 1
