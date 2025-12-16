@@ -64,7 +64,6 @@ def load_value_rules(rules_source):
         if not vtype: continue
         if vtype not in rules: rules[vtype] = {"wildcard": False, "allowed": set()}
         
-        # --- FIX: Support normalized values like 'Y' or 'Uknown' ---
         base_raw = row.get("Base Value")
         base_norm = normalize_value_str(base_raw)
         
@@ -78,7 +77,6 @@ def load_value_rules(rules_source):
         for part in vars_raw.split(","):
             nm = normalize_value_str(part)
             if nm: rules[vtype]["allowed"].add(nm)
-        # -----------------------------------------------------------
     return rules
 
 def normalize_headers(df, header_map):
