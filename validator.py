@@ -3,6 +3,7 @@ import requests
 import math
 import unicodedata
 import argparse
+import json
 from concurrent.futures import ThreadPoolExecutor
 import re
 
@@ -181,7 +182,28 @@ def load_supplier(path):
     ext = path.split(".")[-1].lower()
     if ext == "csv":
         return pd.read_csv(path)
-    return pd.read_excel(path)
+    elif ext == "json":
+        with open(path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        
+        # Handle different JSON structures
+        if isinstance(json_data, dict):
+            if "StoneList" in json_data:
+                return pd.DataFrame(json_data["StoneList"])
+            elif "data" in json_data:
+                return pd.DataFrame(json_data["data"])
+            elif "items" in json_data:
+                return pd.DataFrame(json_data["items"])
+            elif "stones" in json_data:
+                return pd.DataFrame(json_data["stones"])
+            else:
+                return pd.DataFrame([json_data])
+        elif isinstance(json_data, list):
+            return pd.DataFrame(json_data)
+        else:
+            raise ValueError("Unsupported JSON structure. Expected list or dict with data array.")
+    else:  # xlsx
+        return pd.read_excel(path)
 
 
 # ------------------------------------------------------------
@@ -334,7 +356,7 @@ def check_all_urls(df):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("supplier", help="Supplier CSV/XLSX")
+    parser.add_argument("supplier", help="Supplier CSV/XLSX/JSON")
     parser.add_argument("--rules", default="headers.xlsx")
     args = parser.parse_args()
 
