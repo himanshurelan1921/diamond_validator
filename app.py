@@ -3,7 +3,6 @@ import pandas as pd
 import io
 import re
 import math
-import json
 from collections import Counter
 import validator  # our backend module
 import os
@@ -408,7 +407,7 @@ def build_email_body(
         if missing_by_col.get("shape"):
             lines.append(f"- Shape is missing for {missing_by_col['shape']} item(s).")
         if invalid_shape_values:
-            lines.append("- We found invalid shape values that do not match VDB's standardised shape list, for example:")
+            lines.append("- We found invalid shape values that do not match VDB’s standardised shape list, for example:")
             for sh in invalid_shape_values:
                 lines.append(f"  • {sh}")
         lines.append("")
@@ -519,7 +518,7 @@ def build_email_body(
     # Closing
     lines.append("A spreadsheet outlining the above items has been attached for your reference. We would appreciate it if you could make the necessary corrections at your earliest convenience.")
     lines.append("")
-    lines.append("If you have any questions or need further clarification, feel free to reach out. We'll be happy to assist.")
+    lines.append("If you have any questions or need further clarification, feel free to reach out. We’ll be happy to assist.")
     lines.append("")
     lines.append("Best Regards,")
     lines.append("Himanshu")
@@ -532,7 +531,8 @@ def build_email_body(
 # FILE UPLOAD UI
 # ------------------------------------------------------------
 
-supplier_file = st.file_uploader("Upload Supplier Inventory (.csv, .xlsx, or .json)", type=["csv", "xlsx", "json"])
+# (4th Change: Removed rules_file upload)
+supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
 supplier_name = st.text_input("Supplier Name (for email)", value="Supplier")
 
 start_btn = st.button("Run Validation")
@@ -548,7 +548,7 @@ if start_btn:
         st.error("⚠ Please upload the Supplier Inventory file.")
         st.stop()
 
-    # Loading rules locally
+    # (4th Change: Loading rules locally)
     rules_path = "headers.xlsx"
     if not os.path.exists(rules_path):
         st.error(f"Configuration error: The rules file ({rules_path}) was not found in the application directory.")
@@ -566,76 +566,47 @@ if start_btn:
     
     # Load supplier file
     st.info("📄 Loading supplier inventory…")
+    # ... (rest of file loading remains the same)
     supplier_bytes = supplier_file.read()
     ext = supplier_file.name.split(".")[-1].lower()
 
-    try:
-        if ext == "csv":
-            df = pd.read_csv(io.BytesIO(supplier_bytes))
-        elif ext == "json":
-            json_data = json.loads(supplier_bytes.decode('utf-8'))
-            
-            # Handle the structure from your example (ApiStatus + StoneList)
-            if isinstance(json_data, dict):
-                if "StoneList" in json_data:
-                    df = pd.DataFrame(json_data["StoneList"])
-                elif "data" in json_data:
-                    df = pd.DataFrame(json_data["data"])
-                elif "items" in json_data:
-                    df = pd.DataFrame(json_data["items"])
-                elif "stones" in json_data:
-                    df = pd.DataFrame(json_data["stones"])
-                else:
-                    # Try to use the dict itself if it looks like data
-                    if any(isinstance(v, (list, dict)) for v in json_data.values()):
-                        st.error("Could not find data array in JSON. Expected keys: 'StoneList', 'data', 'items', or 'stones'")
-                        st.stop()
-                    df = pd.DataFrame([json_data])
-            elif isinstance(json_data, list):
-                df = pd.DataFrame(json_data)
-            else:
-                st.error("Unsupported JSON structure. Expected a list or dict with data array.")
-                st.stop()
-        else:  # xlsx
-            df = pd.read_excel(io.BytesIO(supplier_bytes))
-        
-        st.success(f"Supplier file loaded: **{len(df)} rows**")
-    except json.JSONDecodeError as e:
-        st.error(f"Invalid JSON file: {str(e)}")
-        st.stop()
-    except Exception as e:
-        st.error(f"Failed to load supplier file: {str(e)}")
-        st.stop()
+    if ext == "csv":
+        df = pd.read_csv(io.BytesIO(supplier_bytes))
+    else:
+        df = pd.read_excel(io.BytesIO(supplier_bytes))
+
+    st.success(f"Supplier file loaded: **{len(df)} rows**")
 
     progress = st.progress(0)
     status = st.empty()
 
-    # STEP 1 – Normalize headers
+    # STEP 1 — Normalize headers
     status.text("Normalizing headers…")
     df, unknown_headers = validator.normalize_headers(df, header_map)
     progress.progress(15)
 
-    # STEP 2 – Mandatory fields
+    # STEP 2 — Mandatory fields
     status.text("Checking mandatory fields…")
     missing_strings = validator.check_mandatory(df) # Raw string list for CLI output
     mandatory_issues, missing_by_col = build_mandatory_issues(df) # Structured issues & counts
     progress.progress(35)
 
-    # STEP 3 – Value checks
+    # STEP 3 — Value checks
     status.text("Validating values…")
     invalid_strings = validator.check_values(df, value_rules)
     invalid_issues, invalid_shape_values = parse_invalid_value_strings(invalid_strings, df)
     progress.progress(60)
 
-    # STEP 4 – URL checks
+    # STEP 4 — URL checks
     status.text("Checking URLs… (fast mode)")
     url_strings = validator.check_all_urls(df)
     url_issues_struct, url_counts = parse_url_issue_strings(url_strings, df)
     progress.progress(80)
 
-    # STEP 5 – Special: cut grade, cert format, price mismatches
+    # STEP 5 — Special: cut grade, cert format, price mismatches
     status.text("Checking cut grade, certificate URL format and price consistency…")
     cut_issues, cut_missing_count = find_missing_cut_grade(df)
+    # The URL status check for certs is implicitly handled by the change in validator.py
     cert_format_issues, non_pdf_cert_count = find_non_pdf_cert_urls(df) 
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
     progress.progress(100)
