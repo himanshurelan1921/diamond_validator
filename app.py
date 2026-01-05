@@ -14,7 +14,7 @@ import os
 st.set_page_config(page_title="Diamond Inventory Validator", layout="wide")
 st.title("Diamond & Lab-Grown Inventory Validator")
 st.markdown("""
-Upload your **supplier inventory file** (.csv, .xlsx, or .json) to validate against the internal rule set.
+Upload your **supplier inventory file** (.csv or .xlsx) to validate against the internal rule set.
 """)
 
 # ------------------------------------------------------------
@@ -86,7 +86,9 @@ def parse_range_issue_strings(range_list, df):
     for msg in range_list:
         m = pattern.match(msg)
         if not m: continue
-        row_num, value, column = int(m.group(1)), m.group(2), m.group(3)
+        row_num = int(m.group(1))
+        value = m.group(2)
+        column = m.group(3)
         data_idx = row_num - 2
         if data_idx < 0 or data_idx >= len(df): continue
         row = df.iloc[data_idx]
@@ -219,20 +221,9 @@ def build_email_body(supplier_name, invalid_shape_values, missing_by_col, invali
             for sh in invalid_shape_values: lines.append(f"    • {sh}")
         lines.append("")
 
-    weight_col = find_canonical_col(pd.DataFrame(columns=missing_by_col.keys()), ["carat", "weight", "carat_weight"])
-    if weight_col and (missing_by_col.get(weight_col) or invalid_by_col.get(weight_col)):
-        lines.append("WEIGHT ISSUES:")
-        if missing_by_col.get(weight_col): lines.append(f" - Weight ({weight_col}) is missing for {missing_by_col[weight_col]} item(s).")
-        lines.append("")
-
-    if missing_by_col.get("color") or invalid_by_col.get("color"):
+    if missing_by_col.get("color"):
         lines.append("COLOR ISSUES:")
-        if missing_by_col.get("color"): lines.append(f" - Color is missing for {missing_by_col['color']} item(s).")
-        lines.append("")
-
-    if missing_by_col.get("clarity") or invalid_by_col.get("clarity"):
-        lines.append("CLARITY ISSUES:")
-        if missing_by_col.get("clarity"): lines.append(f" - Clarity is missing for {missing_by_col['clarity']} item(s).")
+        lines.append(f" - Color is missing for {missing_by_col['color']} item(s).")
         lines.append("")
 
     img_miss = missing_by_col.get("image_url_1", 0) + url_counts.get("missing_image", 0)
@@ -256,11 +247,6 @@ def build_email_body(supplier_name, invalid_shape_values, missing_by_col, invali
         if non_pdf_cert_count: lines.append(f" - {non_pdf_cert_count} cert URL(s) are not direct PDF links.")
         lines.append("")
 
-    if price_mismatch_count or missing_by_col.get("price_per_carat"):
-        lines.append("PRICING ISSUES:")
-        if price_mismatch_count: lines.append(f" - {price_mismatch_count} item(s) have pricing mismatches.")
-        lines.append("")
-
     lines.append("--------------------------------------------------")
     lines.append("")
     lines.append("A spreadsheet outlining the above items has been attached. We would appreciate it if you could make the necessary corrections at your earliest convenience.")
@@ -273,7 +259,7 @@ def build_email_body(supplier_name, invalid_shape_values, missing_by_col, invali
 # MAIN UI
 # ------------------------------------------------------------
 
-supplier_file = st.file_uploader("Upload Supplier Inventory (.csv, .xlsx, or .json)", type=["csv", "xlsx", "json"])
+supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
 supplier_name = st.text_input("Supplier Name", value="Supplier")
 
 if st.button("Run Validation") and supplier_file:
@@ -282,7 +268,6 @@ if st.button("Run Validation") and supplier_file:
     value_rules = validator.load_value_rules(rules_path)
     ext = supplier_file.name.split(".")[-1].lower()
     if ext == "csv": df = pd.read_csv(supplier_file)
-    elif ext == "json": df = pd.read_json(supplier_file)
     else: df = pd.read_excel(supplier_file)
 
     df, unknown_headers = validator.normalize_headers(df, header_map)
