@@ -384,16 +384,16 @@ def check_all_urls(df):
             for col in url_cols:
                 url = row[col] if col in df.columns else None
                 future = executor.submit(fast_check_url, url)
-                tasks.append((idx, col, future))
+                tasks.append((idx, col, url, future))
 
-        for idx, col, future in tasks:
+        for idx, col, url, future in tasks:
             try:
                 result = future.result(timeout=2)
             except Exception:
                 result = "NOT WORKING (timeout)"
 
             if result != "WORKING":
-                bad.append(f"Row {idx + 2}: {col} → {result}")
+                bad.append(f"Row {idx + 2}: {col} → {result} → URL: {url}")
 
     return bad
 
