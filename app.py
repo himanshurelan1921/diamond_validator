@@ -55,7 +55,7 @@ def build_mandatory_issues(df):
                 if validator.is_empty_value(row[col]):
                     issues.append({
                         "Category": "Missing Mandatory",
-                        "Stock No.": stock,
+                        "Stock No.": stock if not validator.is_empty_value(stock) else f"Row {idx + 2}",
                         "Issue Type": "Missing Value",
                         "Column": col,
                         "Value": row[col],
@@ -71,10 +71,11 @@ def parse_invalid_value_strings(invalid_list, df):
     Parse strings like:
       "Row 9: Invalid 'FNT BL' in column 'fluor_intensity'"
     into structured records.
-    Also collect invalid SHAPE values for email.
+    Also collect invalid SHAPE and COLOR values for email.
     """
     issues = []
     invalid_shape_values = set()
+    invalid_color_values = set()
     invalid_by_col = Counter()
 
     pattern = re.compile(r"Row (\d+): Invalid '(.*)' in column '([^']+)'")
@@ -92,6 +93,8 @@ def parse_invalid_value_strings(invalid_list, df):
             continue
         row = df.iloc[data_idx]
         stock = row.get("stock_num", None)
+        if validator.is_empty_value(stock):
+            stock = f"Row {row_num}"
 
         issues.append({
             "Category": "Invalid Value",
@@ -107,8 +110,10 @@ def parse_invalid_value_strings(invalid_list, df):
 
         if column == "shape":
             invalid_shape_values.add(value)
+        elif column == "color":
+            invalid_color_values.add(value)
 
-    return issues, sorted(invalid_shape_values), invalid_by_col
+    return issues, sorted(invalid_shape_values), sorted(invalid_color_values), invalid_by_col
 
 
 def parse_numeric_invalid_strings(numeric_list, df):
@@ -135,6 +140,8 @@ def parse_numeric_invalid_strings(numeric_list, df):
             continue
         row = df.iloc[data_idx]
         stock = row.get("stock_num", None)
+        if validator.is_empty_value(stock):
+            stock = f"Row {row_num}"
 
         if "carat" in column or "weight" in column:
             detail = "Carat/Weight must be greater than 0"
@@ -161,12 +168,11 @@ def parse_numeric_invalid_strings(numeric_list, df):
 def parse_url_issue_strings(url_list, df):
     """
     Parse strings like:
-      "Row 2: image_url_1 → NOT WORKING"
-      "Row 3: cert_url_1 → NOT PROVIDED"
+      "Row 2: image_url_1 → NOT WORKING → URL: http://..."
     into structured records and counts.
     """
     issues = []
-    pattern = re.compile(r"Row (\d+): ([^ ]+) → (.+)")
+    pattern = re.compile(r"Row (\d+): ([^ ]+) → (.+?) → URL: (.+)")
 
     missing_image = 0
     missing_video = 0
@@ -181,18 +187,15 @@ def parse_url_issue_strings(url_list, df):
         row_num = int(m.group(1))
         col = m.group(2)
         status = m.group(3)
-
-        # Skip cert_url_1 entries from the URL checker string list,
-        # as we rely on the PDF format check now.
-        if col == "cert_url_1" and "NOT PROVIDED" not in status:
-            continue
+        url_value = m.group(4)
 
         data_idx = row_num - 2
         if data_idx < 0 or data_idx >= len(df):
             continue
         row = df.iloc[data_idx]
         stock = row.get("stock_num", None)
-        url_value = row.get(col, None)
+        if validator.is_empty_value(stock):
+            stock = f"Row {row_num}"
 
         if "NOT PROVIDED" in status:
             issue_type = "Missing URL"
@@ -204,8 +207,8 @@ def parse_url_issue_strings(url_list, df):
             "Stock No.": stock,
             "Issue Type": issue_type,
             "Column": col,
-            "Value": url_value,
-            "Details": status,
+            "URL": url_value,
+            "Status": status,
             "Row": row_num,
         })
 
@@ -222,7 +225,7 @@ def parse_url_issue_strings(url_list, df):
                 bad_video += 1
         elif col == "cert_url_1":
             if "NOT PROVIDED" in status:
-                bad_cert += 1 
+                bad_cert += 1
             
     counts = {
         "missing_image": missing_image,
@@ -248,6 +251,8 @@ def find_missing_cut_grade(df):
     col = cut_cols[0]
     for idx, row in df.iterrows():
         stock = row.get("stock_num", None)
+        if validator.is_empty_value(stock):
+            stock = f"Row {idx + 2}"
         if validator.is_empty_value(row[col]):
             count += 1
             issues.append({
@@ -259,38 +264,6 @@ def find_missing_cut_grade(df):
                 "Details": "Missing cut grade",
                 "Row": idx + 2,
             })
-    return issues, count
-
-
-def find_non_pdf_cert_urls(df):
-    """
-    Detect certificate URLs that are not direct PDF links.
-    """
-    issues = []
-    count = 0
-
-    if "cert_url_1" not in df.columns:
-        return issues, 0
-
-    for idx, row in df.iterrows():
-        stock = row.get("stock_num", None)
-        url = row.get("cert_url_1", None)
-        if validator.is_empty_value(url):
-            continue
-
-        url_lower = str(url).lower()
-        if ".pdf" not in url_lower:
-            count += 1
-            issues.append({
-                "Category": "URL Issue",
-                "Stock No.": stock,
-                "Issue Type": "Cert URL Format",
-                "Column": "cert_url_1",
-                "Value": url,
-                "Details": "Certificate URL is not a direct PDF link",
-                "Row": idx + 2,
-            })
-
     return issues, count
 
 
@@ -323,6 +296,8 @@ def build_price_mismatch_issues(df):
 
     for idx, row in df.iterrows():
         stock = row.get("stock_num", None)
+        if validator.is_empty_value(stock):
+            stock = f"Row {idx + 2}"
         w = to_float(row.get(weight_col, None))
         ppc = to_float(row.get(ppc_col, None))
         tsp = to_float(row.get(tsp_col, None))
@@ -386,8 +361,6 @@ def build_excel_report(structured_issues):
         # Special handling
         if issue["Issue Type"] == "Price Mismatch":
              sheet_name = "8. Price"
-        elif issue["Issue Type"] == "Cert URL Format":
-             sheet_name = "7. Certificate URL"
         elif issue["Column"] in ["cut", "cut_grade"]:
             sheet_name = other_sheet
 
@@ -417,12 +390,13 @@ def build_excel_report(structured_issues):
 def build_email_body(
     supplier_name,
     invalid_shape_values,
+    invalid_color_values,
     missing_by_col,
     invalid_by_col,
     url_counts,
     cut_missing_count,
-    non_pdf_cert_count,
     price_mismatch_count,
+    missing_stock_count,
 ):
     """
     Build the final email text based on actual issues.
@@ -437,9 +411,9 @@ def build_email_body(
     lines.append("")
 
     # --- Stock Number (0. Stock Number) ---
-    if missing_by_col.get("stock_num"):
+    if missing_stock_count > 0:
         lines.append("0. Stock Number")
-        lines.append(f"- Stock number is missing for {missing_by_col['stock_num']} item(s).")
+        lines.append(f"- Stock number is missing for {missing_stock_count} item(s).")
         lines.append("")
 
     # --- Shape (1. Shape) ---
@@ -469,12 +443,14 @@ def build_email_body(
         lines.append("")
 
     # --- Color (3. Color) ---
-    if missing_by_col.get("color") or invalid_by_col.get("color"):
+    if missing_by_col.get("color") or invalid_by_col.get("color") or invalid_color_values:
         lines.append("3. Color")
         if missing_by_col.get("color"):
             lines.append(f"- Color is missing for {missing_by_col['color']} item(s).")
-        if invalid_by_col.get("color"):
-            lines.append(f"- Color has invalid values for {invalid_by_col['color']} item(s).")
+        if invalid_color_values:
+            lines.append("- We found invalid color values that do not match VDB's standardised color list, for example:")
+            for clr in invalid_color_values:
+                lines.append(f"  • {clr}")
         lines.append("")
 
     # --- Clarity (4. Clarity) ---
@@ -509,15 +485,12 @@ def build_email_body(
     # --- Certificate (7. Certificate URL) ---
     cert_issue_present = (
         missing_by_col.get("cert_url_1", 0)
-        or non_pdf_cert_count
         or url_counts.get("bad_cert", 0)
     )
     if cert_issue_present:
         lines.append("7. Certificate URLs")
         if missing_by_col.get("cert_url_1", 0) + url_counts.get("bad_cert", 0) > 0:
              lines.append(f"- Certificate URLs are missing for {missing_by_col['cert_url_1'] + url_counts['bad_cert']} item(s).")
-        if non_pdf_cert_count:
-            lines.append(f"- {non_pdf_cert_count} certificate URL(s) do not appear to be direct PDF links. Please use direct PDF links (e.g., `https://.../LG700531186.pdf`).")
         lines.append("")
 
     # --- Price (8. Price) ---
@@ -555,8 +528,7 @@ def build_email_body(
     lines.append("If you have any questions or need further clarification, feel free to reach out. We'll be happy to assist.")
     lines.append("")
     lines.append("Best Regards,")
-    lines.append("Himanshu")
-    lines.append("VDB Marketplace Support")
+    lines.append("VDB Marketplace Support Team")
 
     return "\n".join(lines)
 
@@ -620,6 +592,9 @@ if start_btn:
     status.text("Checking mandatory fields…")
     missing_strings = validator.check_mandatory(df)
     mandatory_issues, missing_by_col = build_mandatory_issues(df)
+    
+    # Count missing stock numbers separately for email
+    missing_stock_count = sum(1 for issue in mandatory_issues if issue["Column"] == "stock_num")
     progress.progress(25)
 
     # STEP 3 – Numeric range checks
@@ -631,7 +606,7 @@ if start_btn:
     # STEP 4 – Value checks
     status.text("Validating values…")
     invalid_strings = validator.check_values(df, value_rules)
-    invalid_issues, invalid_shape_values, invalid_by_col = parse_invalid_value_strings(invalid_strings, df)
+    invalid_issues, invalid_shape_values, invalid_color_values, invalid_by_col = parse_invalid_value_strings(invalid_strings, df)
     progress.progress(60)
 
     # Merge numeric invalids into invalid_by_col for email
@@ -644,10 +619,9 @@ if start_btn:
     url_issues_struct, url_counts = parse_url_issue_strings(url_strings, df)
     progress.progress(75)
 
-    # STEP 6 – Special: cut grade, cert format, price mismatches
-    status.text("Checking cut grade, certificate URL format and price consistency…")
+    # STEP 6 – Special: cut grade, price mismatches
+    status.text("Checking cut grade and price consistency…")
     cut_issues, cut_missing_count = find_missing_cut_grade(df)
-    cert_format_issues, non_pdf_cert_count = find_non_pdf_cert_urls(df) 
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
     progress.progress(100)
 
@@ -677,10 +651,10 @@ if start_btn:
     filtered_url_strings = [s for s in url_strings if 'cert_url_1' not in s or 'NOT PROVIDED' in s]
     
     if filtered_url_strings:
-        st.error("❌ URL Issues (Image/Video)")
+        st.error("❌ URL Issues (Image/Video/Cert)")
         st.write(filtered_url_strings)
     else:
-        st.success("✅ All Image and Video URLs are working or missing.")
+        st.success("✅ All URLs are working or missing.")
 
     # --------------------------------------------------------
     # STRUCTURED ISSUES & EXCEL REPORT
@@ -691,7 +665,6 @@ if start_btn:
     structured_issues.extend(invalid_issues)
     structured_issues.extend(url_issues_struct)
     structured_issues.extend(cut_issues)
-    structured_issues.extend(cert_format_issues)
     structured_issues.extend(price_issues)
 
     excel_buffer = build_excel_report(structured_issues)
@@ -707,17 +680,29 @@ if start_btn:
     # --------------------------------------------------------
     # EMAIL SUMMARY
     # --------------------------------------------------------
-    st.subheader("📧 Email Summary (copy & paste)")
+    st.subheader("📧 Email Summary")
 
     email_body = build_email_body(
         supplier_name=supplier_name,
         invalid_shape_values=invalid_shape_values,
+        invalid_color_values=invalid_color_values,
         missing_by_col=missing_by_col,
         invalid_by_col=invalid_by_col,
         url_counts=url_counts,
         cut_missing_count=cut_missing_count,
-        non_pdf_cert_count=non_pdf_cert_count,
         price_mismatch_count=price_mismatch_count,
+        missing_stock_count=missing_stock_count,
     )
 
-    st.text_area("Email to Supplier", value=email_body, height=400)
+    # Create two columns: one for text area, one for copy button
+    col1, col2 = st.columns([6, 1])
+    
+    with col1:
+        st.text_area("Email to Supplier", value=email_body, height=400, key="email_text")
+    
+    with col2:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        if st.button("📋 Copy Email", use_container_width=True):
+            st.code(email_body, language=None)
+            st.success("Email ready to copy! Select the text above and copy it.")
