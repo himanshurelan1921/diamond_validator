@@ -68,6 +68,24 @@ def normalize_value_str(value):
     return s.lower()
 
 
+def is_empty_value(value):
+    """
+    Enhanced check for truly empty values.
+    Returns True if value is None, NaN, empty string, or whitespace only.
+    """
+    if value is None:
+        return True
+    
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    
+    s = str(value).strip()
+    if not s or s.lower() == "nan":
+        return True
+    
+    return False
+
+
 # ------------------------------------------------------------
 # LOAD HEADER RULES (Columns sheet)
 # ------------------------------------------------------------
@@ -209,6 +227,55 @@ def normalize_headers(df, header_map):
 
 
 # ------------------------------------------------------------
+# NUMERIC RANGE VALIDATION
+# ------------------------------------------------------------
+
+def check_numeric_ranges(df):
+    """
+    Check for invalid numeric values in specific columns:
+    - carat/weight: must be > 0
+    - price fields: must be > 0
+    """
+    invalid = []
+    
+    # Check carat/weight columns
+    weight_cols = [c for c in df.columns if c in ["carat", "weight", "carat_weight"]]
+    for col in weight_cols:
+        for idx, val in df[col].items():
+            if is_empty_value(val):
+                continue
+            
+            try:
+                num_val = float(str(val).replace(",", ""))
+                if num_val <= 0:
+                    invalid.append(
+                        f"Row {idx + 2}: Invalid carat value '{val}' in column '{col}' (must be > 0)"
+                    )
+            except (ValueError, TypeError):
+                # Will be caught by value validation
+                pass
+    
+    # Check price columns
+    price_cols = [c for c in df.columns if c in ["price_per_carat", "total_sales_price"]]
+    for col in price_cols:
+        for idx, val in df[col].items():
+            if is_empty_value(val):
+                continue
+            
+            try:
+                num_val = float(str(val).replace(",", ""))
+                if num_val <= 0:
+                    invalid.append(
+                        f"Row {idx + 2}: Invalid price '{val}' in column '{col}' (must be > 0)"
+                    )
+            except (ValueError, TypeError):
+                # Will be caught by value validation
+                pass
+    
+    return invalid
+
+
+# ------------------------------------------------------------
 # VALUE VALIDATION
 # ------------------------------------------------------------
 
@@ -268,16 +335,19 @@ MANDATORY_COLS = [
 def check_mandatory(df):
     """
     Check that mandatory canonical columns exist and non-empty.
-    Uses strict normalize_value_str (leading/trailing spaces allowed).
+    Uses enhanced is_empty_value() function.
     """
     missing = []
     for idx, row in df.iterrows():
         missing_cols = []
         for col in MANDATORY_COLS:
             if col in df.columns:
-                v_norm = normalize_value_str(row[col])
-                if v_norm is None:
+                if is_empty_value(row[col]):
                     missing_cols.append(col)
+            else:
+                # Column doesn't exist in df
+                missing_cols.append(col)
+        
         if missing_cols:
             missing.append(f"Row {idx + 2}: Missing {missing_cols}")
     return missing
@@ -351,6 +421,9 @@ def main():
     print("Checking mandatory fields...")
     missing = check_mandatory(df)
 
+    print("Checking numeric ranges...")
+    numeric_invalid = check_numeric_ranges(df)
+
     print("Checking values...")
     invalid = check_values(df, value_rules)
 
@@ -364,6 +437,9 @@ def main():
 
     if missing:
         print("Missing Mandatory:", missing, "\n")
+
+    if numeric_invalid:
+        print("Invalid Numeric Values:", numeric_invalid, "\n")
 
     if invalid:
         print("Invalid Values:", invalid, "\n")
