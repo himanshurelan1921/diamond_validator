@@ -483,16 +483,16 @@ if 'validation_results' not in st.session_state:
 # FILE UPLOAD UI
 # ------------------------------------------------------------
 
-col_upload, col_reset = st.columns([4, 1])
+supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
 
-with col_upload:
-    supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
+col1, col2 = st.columns([3, 1])
+with col1:
     supplier_name = st.text_input("Supplier Name (for email)", value="Supplier")
 
-with col_reset:
+with col2:
     st.write("")
     st.write("")
-    if st.button("🔄 Reset", help="Clear all results and start fresh"):
+    if st.button("🔄 Reset", help="Clear all results and start fresh", key="reset_button", type="secondary"):
         st.session_state.validation_complete = False
         st.session_state.validation_results = None
         st.session_state.last_file_name = None
@@ -504,7 +504,7 @@ if supplier_file and st.session_state.get('last_file_name') != supplier_file.nam
     st.session_state.validation_results = None
     st.session_state.last_file_name = supplier_file.name
 
-start_btn = st.button("Run Validation")
+start_btn = st.button("Run Validation", type="primary")
 
 # ------------------------------------------------------------
 # MAIN FLOW
@@ -688,34 +688,9 @@ if st.session_state.validation_complete and st.session_state.validation_results:
     # --------------------------------------------------------
     st.subheader("📧 Email Summary")
 
-    col1, col2 = st.columns([6, 1])
+    st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text", label_visibility="collapsed")
     
-    with col1:
-        st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text", label_visibility="collapsed")
-    
-    with col2:
-        st.write("")
-        st.write("")
-        st.write("")
-        # Simple copy button that uses browser clipboard API
-        copy_button_html = f"""
-        <button onclick="navigator.clipboard.writeText(`{results['email_body'].replace('`', '\\`').replace('\n', '\\n')}`).then(() => {{
-            alert('✅ Email copied to clipboard!');
-        }}).catch(err => {{
-            alert('❌ Failed to copy. Please select and copy manually.');
-        }});" 
-        style="
-            background-color: #FF4B4B;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            width: 100%;
-        ">
-        📋 Copy Email
-        </button>
-        """
-        st.markdown(copy_button_html, unsafe_allow_html=True)
+    # Streamlit native copy button using pyperclip alternative
+    if st.button("📋 Copy Email to Clipboard", key="copy_email_button", type="secondary"):
+        st.info("✅ Email text is displayed above. Please select all (Ctrl+A or Cmd+A) and copy (Ctrl+C or Cmd+C)")
+        st.code(results['email_body'], language=None)
