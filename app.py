@@ -277,7 +277,6 @@ def build_price_mismatch_issues(df):
     return issues, count
 
 def build_excel_report(structured_issues):
-    # Start numbering from 1 (removed "0. Stock Number")
     section_map = {
         "stock_num": "1. Stock Number",
         "shape": "2. Shape",
@@ -347,7 +346,6 @@ def build_email_body(
     lines.append("During a routine validation of your inventory on the VDB Marketplace, we identified a few issues that need your attention. Please find the details below:")
     lines.append("")
 
-    # Start numbering from 1
     section_num = 1
 
     if missing_stock_count > 0:
@@ -500,7 +498,6 @@ with col1:
         value=st.session_state.supplier_name_value,
         key="supplier_name_input"
     )
-    # Update session state when supplier name changes
     if supplier_name != st.session_state.supplier_name_value:
         st.session_state.supplier_name_value = supplier_name
 
@@ -508,16 +505,13 @@ with col2:
     st.write("")
     st.write("")
     if st.button("🔄 Reset", help="Clear all results and start fresh", key="reset_button", type="secondary"):
-        # Clear all session state
         st.session_state.validation_complete = False
         st.session_state.validation_results = None
         st.session_state.last_file_name = None
         st.session_state.supplier_name_value = "Supplier"
-        # Increment file uploader key to reset it
         st.session_state.file_uploader_key += 1
         st.rerun()
 
-# Reset validation when new file is uploaded
 if supplier_file and st.session_state.get('last_file_name') != supplier_file.name:
     st.session_state.validation_complete = False
     st.session_state.validation_results = None
@@ -531,10 +525,6 @@ start_btn = st.button("Run Validation", type="primary")
 
 if start_btn and supplier_file:
 
-    if not supplier_file:
-        st.error("⚠ Please upload the Supplier Inventory file.")
-        st.stop()
-
     rules_path = "headers.xlsx"
     if not os.path.exists(rules_path):
         st.error(f"Configuration error: The rules file ({rules_path}) was not found.")
@@ -545,6 +535,7 @@ if start_btn and supplier_file:
         header_map, canonical_set = validator.load_header_rules(rules_path)
         value_rules = validator.load_value_rules(rules_path)
         st.success("Rules loaded successfully.")
+        
     except Exception as e:
         st.error(f"Failed to load rules. Error: {e}")
         st.stop()
@@ -596,9 +587,6 @@ if start_btn and supplier_file:
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
     progress.progress(90)
 
-    # --------------------------------------------------------
-    # BUILD FINAL RESULTS
-    # --------------------------------------------------------
     status.text("Building reports…")
     structured_issues = []
     structured_issues.extend(mandatory_issues)
@@ -625,7 +613,6 @@ if start_btn and supplier_file:
     progress.progress(100)
     status.text("✅ Validation completed!")
 
-    # Store results in session state
     st.session_state.validation_complete = True
     st.session_state.validation_results = {
         'df': df,
@@ -648,7 +635,6 @@ if start_btn and supplier_file:
         'supplier_name': supplier_name,
     }
     
-    # Force a rerun to display results
     st.rerun()
 
 # ------------------------------------------------------------
@@ -661,9 +647,6 @@ if st.session_state.validation_complete and st.session_state.validation_results:
     
     st.success("✅ Validation completed!")
     
-    # --------------------------------------------------------
-    # SHOW RAW RESULTS
-    # --------------------------------------------------------
     st.subheader("📌 Raw Validation Output")
 
     if results['unknown_headers']:
@@ -690,9 +673,6 @@ if st.session_state.validation_complete and st.session_state.validation_results:
     else:
         st.success("✅ All URLs are working or missing.")
 
-    # --------------------------------------------------------
-    # EXCEL REPORT DOWNLOAD
-    # --------------------------------------------------------
     st.subheader("📊 Download Detailed Spreadsheet")
     st.download_button(
         label="📥 Download validation_report.xlsx",
@@ -702,14 +682,10 @@ if st.session_state.validation_complete and st.session_state.validation_results:
         key="download_excel"
     )
 
-    # --------------------------------------------------------
-    # EMAIL SUMMARY WITH COPY
-    # --------------------------------------------------------
     st.subheader("📧 Email Summary")
 
     st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text", label_visibility="collapsed")
     
-    # Streamlit native copy button using pyperclip alternative
     if st.button("📋 Copy Email to Clipboard", key="copy_email_button", type="secondary"):
         st.info("✅ Email text is displayed above. Please select all (Ctrl+A or Cmd+A) and copy (Ctrl+C or Cmd+C)")
         st.code(results['email_body'], language=None)
