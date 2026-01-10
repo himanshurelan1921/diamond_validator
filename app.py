@@ -478,24 +478,43 @@ if 'validation_complete' not in st.session_state:
     st.session_state.validation_complete = False
 if 'validation_results' not in st.session_state:
     st.session_state.validation_results = None
+if 'file_uploader_key' not in st.session_state:
+    st.session_state.file_uploader_key = 0
+if 'supplier_name_value' not in st.session_state:
+    st.session_state.supplier_name_value = "Supplier"
 
 # ------------------------------------------------------------
 # FILE UPLOAD UI
 # ------------------------------------------------------------
 
-supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
+supplier_file = st.file_uploader(
+    "Upload Supplier Inventory (.csv or .xlsx)", 
+    type=["csv", "xlsx"],
+    key=f"file_uploader_{st.session_state.file_uploader_key}"
+)
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    supplier_name = st.text_input("Supplier Name (for email)", value="Supplier")
+    supplier_name = st.text_input(
+        "Supplier Name (for email)", 
+        value=st.session_state.supplier_name_value,
+        key="supplier_name_input"
+    )
+    # Update session state when supplier name changes
+    if supplier_name != st.session_state.supplier_name_value:
+        st.session_state.supplier_name_value = supplier_name
 
 with col2:
     st.write("")
     st.write("")
     if st.button("🔄 Reset", help="Clear all results and start fresh", key="reset_button", type="secondary"):
+        # Clear all session state
         st.session_state.validation_complete = False
         st.session_state.validation_results = None
         st.session_state.last_file_name = None
+        st.session_state.supplier_name_value = "Supplier"
+        # Increment file uploader key to reset it
+        st.session_state.file_uploader_key += 1
         st.rerun()
 
 # Reset validation when new file is uploaded
