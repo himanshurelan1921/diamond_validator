@@ -640,6 +640,8 @@ if st.session_state.validation_complete and st.session_state.validation_results:
     
     results = st.session_state.validation_results
     
+    st.success("✅ Validation completed!")
+    
     # --------------------------------------------------------
     # SHOW RAW RESULTS
     # --------------------------------------------------------
