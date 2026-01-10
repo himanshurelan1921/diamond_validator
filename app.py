@@ -471,11 +471,38 @@ def build_email_body(
     return "\n".join(lines)
 
 # ------------------------------------------------------------
+# INITIALIZE SESSION STATE
+# ------------------------------------------------------------
+
+if 'validation_complete' not in st.session_state:
+    st.session_state.validation_complete = False
+if 'validation_results' not in st.session_state:
+    st.session_state.validation_results = None
+
+# ------------------------------------------------------------
 # FILE UPLOAD UI
 # ------------------------------------------------------------
 
-supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
-supplier_name = st.text_input("Supplier Name (for email)", value="Supplier")
+col_upload, col_reset = st.columns([4, 1])
+
+with col_upload:
+    supplier_file = st.file_uploader("Upload Supplier Inventory (.csv or .xlsx)", type=["csv", "xlsx"])
+    supplier_name = st.text_input("Supplier Name (for email)", value="Supplier")
+
+with col_reset:
+    st.write("")
+    st.write("")
+    if st.button("🔄 Reset", help="Clear all results and start fresh"):
+        st.session_state.validation_complete = False
+        st.session_state.validation_results = None
+        st.session_state.last_file_name = None
+        st.rerun()
+
+# Reset validation when new file is uploaded
+if supplier_file and st.session_state.get('last_file_name') != supplier_file.name:
+    st.session_state.validation_complete = False
+    st.session_state.validation_results = None
+    st.session_state.last_file_name = supplier_file.name
 
 start_btn = st.button("Run Validation")
 
@@ -483,7 +510,7 @@ start_btn = st.button("Run Validation")
 # MAIN FLOW
 # ------------------------------------------------------------
 
-if start_btn:
+if start_btn and supplier_file:
 
     if not supplier_file:
         st.error("⚠ Please upload the Supplier Inventory file.")
@@ -550,39 +577,8 @@ if start_btn:
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
     progress.progress(100)
 
-    st.success("✅ Validation completed!")
-
     # --------------------------------------------------------
-    # SHOW RAW RESULTS
-    # --------------------------------------------------------
-    st.subheader("📌 Raw Validation Output")
-
-    if unknown_headers:
-        st.warning("⚠ Unknown Headers Found")
-        st.write(unknown_headers)
-
-    if missing_strings:
-        st.error("❌ Missing Mandatory Fields")
-        st.write(missing_strings)
-
-    if numeric_invalid_strings:
-        st.error("❌ Invalid Numeric Values (Zero/Negative)")
-        st.write(numeric_invalid_strings)
-
-    if invalid_strings:
-        st.error("❌ Invalid Values Found")
-        st.write(invalid_strings)
-
-    filtered_url_strings = [s for s in url_strings if 'cert_url_1' not in s or 'NOT PROVIDED' in s]
-    
-    if filtered_url_strings:
-        st.error("❌ URL Issues (Image/Video/Cert)")
-        st.write(filtered_url_strings)
-    else:
-        st.success("✅ All URLs are working or missing.")
-
-    # --------------------------------------------------------
-    # STRUCTURED ISSUES & EXCEL REPORT
+    # BUILD FINAL RESULTS
     # --------------------------------------------------------
     structured_issues = []
     structured_issues.extend(mandatory_issues)
@@ -593,20 +589,6 @@ if start_btn:
     structured_issues.extend(price_issues)
 
     excel_buffer = build_excel_report(structured_issues)
-
-    st.subheader("📊 Download Detailed Spreadsheet")
-    st.download_button(
-        label="📥 Download validation_report.xlsx",
-        data=excel_buffer,
-        file_name="validation_report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="download_excel"
-    )
-
-    # --------------------------------------------------------
-    # EMAIL SUMMARY
-    # --------------------------------------------------------
-    st.subheader("📧 Email Summary")
 
     email_body = build_email_body(
         supplier_name=supplier_name,
@@ -620,23 +602,87 @@ if start_btn:
         missing_stock_count=missing_stock_count,
     )
 
-    col1, col2 = st.columns([5, 1])
+    st.success("✅ Validation completed!")
+
+    # Store results in session state
+    st.session_state.validation_complete = True
+    st.session_state.validation_results = {
+        'df': df,
+        'unknown_headers': unknown_headers,
+        'missing_strings': missing_strings,
+        'numeric_invalid_strings': numeric_invalid_strings,
+        'invalid_strings': invalid_strings,
+        'url_strings': url_strings,
+        'structured_issues': structured_issues,
+        'email_body': email_body,
+        'invalid_shape_values': invalid_shape_values,
+        'invalid_color_values': invalid_color_values,
+        'missing_by_col': missing_by_col,
+        'invalid_by_col': invalid_by_col,
+        'url_counts': url_counts,
+        'cut_missing_count': cut_missing_count,
+        'price_mismatch_count': price_mismatch_count,
+        'missing_stock_count': missing_stock_count,
+        'excel_buffer': excel_buffer,
+    }
+
+# ------------------------------------------------------------
+# DISPLAY RESULTS (from session state if available)
+# ------------------------------------------------------------
+
+if st.session_state.validation_complete and st.session_state.validation_results:
     
-    with col1:
-        st.text_area("Email to Supplier", value=email_body, height=400, key="email_text")
+    results = st.session_state.validation_results
     
-    with col2:
-        st.write("")
-        st.write("")
-        # Use clipboard copy with streamlit
-        if st.button("📋 Copy", use_container_width=True, help="Click to copy email"):
-            st.session_state.show_copy_success = True
-            # Use st.code to make it easy to copy
-            st.code(email_body, language=None)
+    # --------------------------------------------------------
+    # SHOW RAW RESULTS
+    # --------------------------------------------------------
+    st.subheader("📌 Raw Validation Output")
+
+    if results['unknown_headers']:
+        st.warning("⚠ Unknown Headers Found")
+        st.write(results['unknown_headers'])
+
+    if results['missing_strings']:
+        st.error("❌ Missing Mandatory Fields")
+        st.write(results['missing_strings'])
+
+    if results['numeric_invalid_strings']:
+        st.error("❌ Invalid Numeric Values (Zero/Negative)")
+        st.write(results['numeric_invalid_strings'])
+
+    if results['invalid_strings']:
+        st.error("❌ Invalid Values Found")
+        st.write(results['invalid_strings'])
+
+    filtered_url_strings = [s for s in results['url_strings'] if 'cert_url_1' not in s or 'NOT PROVIDED' in s]
     
-    if st.session_state.get('show_copy_success', False):
-        st.success("✅ Email is displayed above - select and copy it!")
-        # Reset after showing
-        if st.button("Hide"):
-            st.session_state.show_copy_success = False
-            st.rerun()
+    if filtered_url_strings:
+        st.error("❌ URL Issues (Image/Video/Cert)")
+        st.write(filtered_url_strings)
+    else:
+        st.success("✅ All URLs are working or missing.")
+
+    # --------------------------------------------------------
+    # EXCEL REPORT DOWNLOAD
+    # --------------------------------------------------------
+    st.subheader("📊 Download Detailed Spreadsheet")
+    st.download_button(
+        label="📥 Download validation_report.xlsx",
+        data=results['excel_buffer'],
+        file_name="validation_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_excel"
+    )
+
+    # --------------------------------------------------------
+    # EMAIL SUMMARY WITH COPY
+    # --------------------------------------------------------
+    st.subheader("📧 Email Summary")
+
+    st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text")
+    
+    # Copy button that shows copyable text
+    if st.button("📋 Copy Email to Clipboard", use_container_width=False, help="Click to display copyable email"):
+        st.info("👇 Select all the text below and copy it (Ctrl+A, Ctrl+C or Cmd+A, Cmd+C)")
+        st.code(results['email_body'], language=None)
