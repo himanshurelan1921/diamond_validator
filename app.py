@@ -688,9 +688,34 @@ if st.session_state.validation_complete and st.session_state.validation_results:
     # --------------------------------------------------------
     st.subheader("📧 Email Summary")
 
-    st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text")
+    col1, col2 = st.columns([6, 1])
     
-    # Copy button that shows copyable text
-    if st.button("📋 Copy Email to Clipboard", use_container_width=False, help="Click to display copyable email"):
-        st.info("👇 Select all the text below and copy it (Ctrl+A, Ctrl+C or Cmd+A, Cmd+C)")
-        st.code(results['email_body'], language=None)
+    with col1:
+        st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text", label_visibility="collapsed")
+    
+    with col2:
+        st.write("")
+        st.write("")
+        st.write("")
+        # Simple copy button that uses browser clipboard API
+        copy_button_html = f"""
+        <button onclick="navigator.clipboard.writeText(`{results['email_body'].replace('`', '\\`').replace('\n', '\\n')}`).then(() => {{
+            alert('✅ Email copied to clipboard!');
+        }}).catch(err => {{
+            alert('❌ Failed to copy. Please select and copy manually.');
+        }});" 
+        style="
+            background-color: #FF4B4B;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            width: 100%;
+        ">
+        📋 Copy Email
+        </button>
+        """
+        st.markdown(copy_button_html, unsafe_allow_html=True)
