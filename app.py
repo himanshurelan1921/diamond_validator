@@ -575,11 +575,12 @@ if start_btn and supplier_file:
     status.text("Checking cut grade and price consistency…")
     cut_issues, cut_missing_count = find_missing_cut_grade(df)
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
-    progress.progress(100)
+    progress.progress(90)
 
     # --------------------------------------------------------
     # BUILD FINAL RESULTS
     # --------------------------------------------------------
+    status.text("Building reports…")
     structured_issues = []
     structured_issues.extend(mandatory_issues)
     structured_issues.extend(numeric_invalid_issues)
@@ -601,8 +602,9 @@ if start_btn and supplier_file:
         price_mismatch_count=price_mismatch_count,
         missing_stock_count=missing_stock_count,
     )
-
-    st.success("✅ Validation completed!")
+    
+    progress.progress(100)
+    status.text("✅ Validation completed!")
 
     # Store results in session state
     st.session_state.validation_complete = True
@@ -624,7 +626,11 @@ if start_btn and supplier_file:
         'price_mismatch_count': price_mismatch_count,
         'missing_stock_count': missing_stock_count,
         'excel_buffer': excel_buffer,
+        'supplier_name': supplier_name,
     }
+    
+    # Force a rerun to display results
+    st.rerun()
 
 # ------------------------------------------------------------
 # DISPLAY RESULTS (from session state if available)
