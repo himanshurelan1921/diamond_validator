@@ -486,8 +486,8 @@ if 'supplier_name_value' not in st.session_state:
 # ------------------------------------------------------------
 
 supplier_file = st.file_uploader(
-    "Upload Supplier Inventory (.csv or .xlsx)", 
-    type=["csv", "xlsx"],
+    "Upload Supplier Inventory (.csv, .xlsx, or .json)", 
+    type=["csv", "xlsx", "json"],
     key=f"file_uploader_{st.session_state.file_uploader_key}"
 )
 
@@ -544,10 +544,21 @@ if start_btn and supplier_file:
     supplier_bytes = supplier_file.read()
     ext = supplier_file.name.split(".")[-1].lower()
 
-    if ext == "csv":
-        df = pd.read_csv(io.BytesIO(supplier_bytes))
-    else:
-        df = pd.read_excel(io.BytesIO(supplier_bytes))
+    try:
+        if ext == "csv":
+            df = pd.read_csv(io.BytesIO(supplier_bytes))
+        elif ext == "json":
+            # Read JSON and convert to DataFrame
+            df = pd.read_json(io.BytesIO(supplier_bytes))
+            # If JSON is a single object, wrap it in a list
+            if isinstance(df, pd.Series):
+                df = pd.DataFrame([df])
+        else:
+            df = pd.read_excel(io.BytesIO(supplier_bytes))
+    except Exception as e:
+        st.error(f"Failed to read file. Error: {e}")
+        st.info("💡 Tip: Make sure your JSON file is formatted as an array of objects, e.g., [{...}, {...}]")
+        st.stop()
 
     st.success(f"Supplier file loaded: **{len(df)} rows**")
 
