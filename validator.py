@@ -173,8 +173,6 @@ def load_supplier(path):
     ext = path.split(".")[-1].lower()
     if ext == "csv":
         return pd.read_csv(path)
-    elif ext == "json":
-        return pd.read_json(path)
     return pd.read_excel(path)
 
 
