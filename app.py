@@ -403,11 +403,30 @@ def build_excel_report(structured_issues, df=None):
         "cert_url_1": "8. Certificate URL",
         "price_per_carat": "9. Price",
         "total_sales_price": "9. Price",
+        "cut": "10. Cut (Round)",
+        "cut_grade": "10. Cut (Round)",
     }
-    other_sheet = "10. Other Issues / Cut Grade"
+    other_sheet = "11. Other Issues"
     
     issues_by_sheet = {}
     
+    # Desired workbook tab order (avoid lexicographic "10." coming between "1." and "2.")
+    sheet_order = [
+        "Summary",
+        "1. Stock Number",
+        "2. Shape",
+        "3. Weight",
+        "4. Color",
+        "5. Clarity",
+        "6. Image URL",
+        "7. Video URL",
+        "8. Certificate URL",
+        "9. Price",
+        "10. Cut (Round)",
+        other_sheet,
+        "No Issues Found",
+    ]
+
     all_sheet_names = set(section_map.values())
     all_sheet_names.add(other_sheet)
     for name in all_sheet_names:
@@ -419,8 +438,6 @@ def build_excel_report(structured_issues, df=None):
         
         if issue["Issue Type"] == "Price Mismatch":
              sheet_name = "9. Price"
-        elif issue["Column"] in ["cut", "cut_grade"]:
-            sheet_name = other_sheet
 
         issues_by_sheet[sheet_name].append(issue)
 
@@ -566,20 +583,19 @@ def build_excel_report(structured_issues, df=None):
         """
         rows = []
         sr = 1
-        total_items = len(df) if df is not None else ""
-        rows.append({
-            "Sr. No.": sr,
-            "Issue Column": "",
-            "Issue": "Total Items",
-            "Critical": "",
-            "Impact": "",
-            "Link": "",
-            "Items Impacted": total_items,
-            "Resolution": "",
-            "Comments": "",
-            "__sheet": None,
-        })
-        sr += 1
+        def compute_total_items():
+            if df is None:
+                return ""
+            if getattr(df, "empty", True):
+                return 0
+            # Ignore fully blank rows (common in exported XLSX)
+            total = 0
+            for _, r in df.iterrows():
+                if any(not validator.is_empty_value(v) for v in r.values):
+                    total += 1
+            return total
+
+        total_items = compute_total_items()
 
         # Stock Number
         m_cnt, inv_vals, inv_cnt = summarize_column("stock_num")
@@ -781,7 +797,7 @@ def build_excel_report(structured_issues, df=None):
                 "Items Impacted": int(cut_missing),
                 "Resolution": "Please provide Cut value for Round stones to show it on the app.",
                 "Comments": "",
-                "__sheet": "10. Other Issues / Cut Grade",
+                "__sheet": "10. Cut (Round)",
             })
             sr += 1
 
@@ -803,9 +819,23 @@ def build_excel_report(structured_issues, df=None):
                 "Items Impacted": int(a_m + a_inv_cnt),
                 "Resolution": "Please provide accepted Availability values for all affected items.",
                 "Comments": "",
-                "__sheet": "10. Other Issues / Cut Grade",
+                "__sheet": other_sheet,
             })
             sr += 1
+
+        # Total Items (move to last row as requested)
+        rows.append({
+            "Sr. No.": sr,
+            "Issue Column": "",
+            "Issue": "Total Items",
+            "Critical": "",
+            "Impact": "",
+            "Link": "",
+            "Items Impacted": total_items,
+            "Resolution": "",
+            "Comments": "",
+            "__sheet": None,
+        })
 
         return rows
 
@@ -839,7 +869,11 @@ def build_excel_report(structured_issues, df=None):
                     return None
                 return row_num - 2  # data starts at Excel row 2
 
-            for sheet_name in sorted(issues_by_sheet.keys()):
+            for sheet_name in sheet_order:
+                if sheet_name in {"Summary", "No Issues Found"}:
+                    continue
+                if sheet_name not in issues_by_sheet:
+                    continue
                 if not issues_by_sheet[sheet_name]:
                     continue
 
@@ -914,7 +948,7 @@ def build_excel_report(structured_issues, df=None):
 
         apply_borders(ws_sum)
 
-        # Detail sheet styling
+        # Detail sheet styling (in deterministic order)
         for name in wb.sheetnames:
             if name in {"Summary", "No Issues Found"}:
                 continue
