@@ -70,17 +70,15 @@ def build_mandatory_issues(df):
             if col in df.columns:
                 if col == "color":
                     # If Color is missing, allow Fancy Color fields to satisfy the requirement.
-                    if (
-                        validator.is_empty_value(row.get("color", None))
-                        and not (
-                            not validator.is_empty_value(row.get("fancy_color_dominant_color", None))
-                            or not validator.is_empty_value(row.get("fancy_color_intensity", None))
-                        )
-                    ):
-                        pass
-                    else:
+                    color_missing = validator.is_empty_value(row.get("color", None))
+                    fancy_present = (
+                        not validator.is_empty_value(row.get("fancy_color_dominant_color", None))
+                        or not validator.is_empty_value(row.get("fancy_color_intensity", None))
+                    )
+                    if not (color_missing and not fancy_present):
                         continue
-                elif validator.is_empty_value(row[col]):
+
+                if validator.is_empty_value(row[col]) if col != "color" else True:
                     issues.append({
                         "Category": "Missing Mandatory",
                         "Stock No.": stock if not validator.is_empty_value(stock) else f"Row {idx + 2}",
@@ -158,7 +156,7 @@ def parse_numeric_invalid_strings(numeric_list, df):
         if validator.is_empty_value(stock):
             stock = f"Row {row_num}"
 
-        if "carat" in column or "weight" in column:
+        if "carat" in column or "weight" in column or "size" in column:
             detail = "Carat/Weight must be greater than 0"
             category = "Invalid Value"
         else:
@@ -273,9 +271,18 @@ def build_price_mismatch_issues(df):
     issues = []
     count = 0
 
-    weight_col = find_canonical_col(df, ["carat", "weight", "carat_weight"])
-    ppc_col = find_canonical_col(df, ["price_per_carat"])
-    tsp_col = find_canonical_col(df, ["total_sales_price"])
+    def find_by_norm(candidates):
+        for col in df.columns:
+            n = validator.normalize_header_name(col)
+            if n in candidates:
+                return col
+        return None
+
+    # Look up by normalized header name so this works even if the supplier header
+    # wasn't mapped to a canonical name by headers.xlsx.
+    weight_col = find_by_norm({"carat", "weight", "carat_weight", "size"})
+    ppc_col = find_by_norm({"price_per_carat", "ppc"})
+    tsp_col = find_by_norm({"total_sales_price", "total_price", "total", "amount"})
 
     if not (weight_col and ppc_col and tsp_col):
         return issues, 0
@@ -283,9 +290,10 @@ def build_price_mismatch_issues(df):
     def to_float(x):
         if validator.is_empty_value(x):
             return None
-        s = str(x).strip()
-        s = s.replace(",", "")
+        s = str(x).strip().replace(",", "")
         s = re.sub(r"[^\d.\-]", "", s)
+        if not s or s in {"-", ".", "-."}:
+            return None
         try:
             return float(s)
         except Exception:
@@ -309,7 +317,7 @@ def build_price_mismatch_issues(df):
                 "Category": "Price Issue",
                 "Stock No.": stock,
                 "Issue Type": "Price Mismatch",
-                "Column": tsp_col,
+                "Column": validator.normalize_header_name(tsp_col) or str(tsp_col),
                 "Value": row.get(tsp_col, None),
                 "Details": f"Expected {expected} = {w} * {ppc}, got {tsp}",
                 "Row": idx + 2,
@@ -324,6 +332,7 @@ def build_excel_report(structured_issues):
         "weight": "3. Weight",
         "carat": "3. Weight",
         "carat_weight": "3. Weight",
+        "size": "3. Weight",
         "color": "4. Color",
         "clarity": "5. Clarity",
         "image_url_1": "6. Image URL",
@@ -407,7 +416,7 @@ def build_email_body(
         section_num += 1
 
     weight_col = None
-    for cand in ["carat", "weight", "carat_weight"]:
+    for cand in ["carat", "weight", "carat_weight", "size"]:
         if cand in missing_by_col or cand in invalid_by_col:
             weight_col = cand
             break

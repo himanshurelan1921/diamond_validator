@@ -424,7 +424,10 @@ def check_numeric_ranges(df):
     """
     invalid = []
     
-    weight_cols = [c for c in df.columns if c in ["carat", "weight", "carat_weight"]]
+    weight_cols = [
+        c for c in df.columns
+        if normalize_header_name(c) in {"carat", "weight", "carat_weight", "size"}
+    ]
     for col in weight_cols:
         for idx, val in df[col].items():
             if is_empty_value(val):
@@ -438,7 +441,10 @@ def check_numeric_ranges(df):
                     f"Row {idx + 2}: Invalid carat value '{val}' in column '{col}' (must be > 0)"
                 )
     
-    price_cols = [c for c in df.columns if c in ["price_per_carat", "total_sales_price"]]
+    price_cols = [
+        c for c in df.columns
+        if normalize_header_name(c) in {"price_per_carat", "total_sales_price"}
+    ]
     for col in price_cols:
         for idx, val in df[col].items():
             if is_empty_value(val):
