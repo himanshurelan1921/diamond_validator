@@ -68,7 +68,19 @@ def build_mandatory_issues(df):
         stock = row.get("stock_num", None)
         for col in mandatory_cols:
             if col in df.columns:
-                if validator.is_empty_value(row[col]):
+                if col == "color":
+                    # If Color is missing, allow Fancy Color fields to satisfy the requirement.
+                    if (
+                        validator.is_empty_value(row.get("color", None))
+                        and not (
+                            not validator.is_empty_value(row.get("fancy_color_dominant_color", None))
+                            or not validator.is_empty_value(row.get("fancy_color_intensity", None))
+                        )
+                    ):
+                        pass
+                    else:
+                        continue
+                elif validator.is_empty_value(row[col]):
                     issues.append({
                         "Category": "Missing Mandatory",
                         "Stock No.": stock if not validator.is_empty_value(stock) else f"Row {idx + 2}",
@@ -220,8 +232,8 @@ def parse_url_issue_strings(url_list, df):
             else:
                 bad_video += 1
         elif col == "cert_url_1":
-            if "NOT PROVIDED" in status:
-                bad_cert += 1
+            # Count any cert URL issue (missing, not working, unacceptable format)
+            bad_cert += 1
             
     counts = {
         "missing_image": missing_image,
@@ -583,7 +595,7 @@ if start_btn and supplier_file:
         st.error(
             "Failed to read the uploaded inventory file. "
             "If this is an Excel file, please ensure it is a valid, non-password-protected `.xlsx` "
-            "(not `.xls` and not a renamed file)."
+            "(not `.xls` and not a renamed file). If you started from a `.csv`, you can upload the `.csv` directly."
         )
         st.exception(e)
         st.stop()

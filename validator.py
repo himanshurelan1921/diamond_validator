@@ -6,6 +6,7 @@ import argparse
 import io
 from concurrent.futures import ThreadPoolExecutor
 import re
+from urllib.parse import urlparse
 
 # ------------------------------------------------------------
 # NORMALIZERS
@@ -58,7 +59,24 @@ def normalize_value_str(value):
         return None
 
     s = unicodedata.normalize("NFKC", s)
-    return s.lower()
+    s = s.lower()
+    # Collapse internal whitespace for robustness
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def normalize_value_key(value):
+    """
+    Normalization for matching VALUES robustly:
+    - normalize_value_str
+    - then drop all non-alphanumeric characters (spaces, hyphens, punctuation)
+    This allows matching variants like "VVS 1" == "VVS1", "IF-VVS1" == "IF VVS1", etc.
+    """
+    s = normalize_value_str(value)
+    if s is None:
+        return None
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s or None
 
 
 def is_empty_value(value):
@@ -107,6 +125,63 @@ def _unnamed_column_count(columns):
     return count
 
 
+def _looks_like_xlsx(file_bytes):
+    """
+    XLSX files are ZIP containers; they typically start with 'PK'.
+    This quickly detects common user mistakes like renaming a CSV to .xlsx.
+    """
+    if not file_bytes or len(file_bytes) < 2:
+        return False
+    return file_bytes[:2] == b"PK"
+
+
+def _parse_number(value):
+    """
+    Parse a numeric-ish field robustly (handles commas, currency symbols, text).
+    Returns float or None.
+    """
+    if is_empty_value(value):
+        return None
+    s = str(value).strip()
+    s = s.replace(",", "")
+    # keep digits, dot, and minus
+    s = re.sub(r"[^\d.\-]", "", s)
+    if not s or s in {"-", ".", "-."}:
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _color_is_satisfied(row):
+    """
+    If 'color' is missing, treat it as satisfied when Fancy Color fields are present.
+    """
+    color_val = row.get("color", None)
+    if not is_empty_value(color_val):
+        return True
+
+    fancy_color = row.get("fancy_color_dominant_color", None)
+    fancy_intensity = row.get("fancy_color_intensity", None)
+    return (not is_empty_value(fancy_color)) or (not is_empty_value(fancy_intensity))
+
+
+def _get_url_extension(url):
+    """
+    Return lowercase extension from URL path, without the dot. None if absent.
+    """
+    try:
+        p = urlparse(str(url).strip())
+        path = p.path or ""
+        m = re.search(r"\.([A-Za-z0-9]+)$", path)
+        if not m:
+            return None
+        return m.group(1).lower()
+    except Exception:
+        return None
+
+
 def detect_best_excel_layout(file_bytes, header_map=None, sheet_name=None, max_header_row=6):
     """
     Detect best (sheet_name, header_row) for an uploaded XLSX by:
@@ -115,14 +190,21 @@ def detect_best_excel_layout(file_bytes, header_map=None, sheet_name=None, max_h
     - picking the combo with the most header_map matches, then fewest Unnamed columns.
     """
     if not file_bytes:
-        raise ValueError("The uploaded XLSX file is empty.")
+        raise ValueError("The uploaded `.xlsx` file is empty.")
+
+    if not _looks_like_xlsx(file_bytes):
+        raise ValueError(
+            "This file does not look like a real `.xlsx` workbook (it is not a ZIP-based Excel file). "
+            "If you started from a CSV, either upload the `.csv` directly or re-save/export as an **Excel Workbook (.xlsx)** "
+            "from Excel/Sheets (not by renaming the file extension)."
+        )
 
     try:
         xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     except Exception as e:
         raise ValueError(
             "Unable to read the uploaded Excel file. Please ensure it is a valid, non-password-protected `.xlsx` "
-            "(not `.xls` or a renamed non-Excel file)."
+            f"(not `.xls` or a renamed non-Excel file). Root cause: {type(e).__name__}: {e}"
         ) from e
 
     if not getattr(xls, "sheet_names", None):
@@ -185,7 +267,8 @@ def load_supplier_bytes(file_bytes, filename, header_map=None, sheet_name=None):
         except Exception as e:
             raise ValueError(
                 "Failed to load the uploaded `.xlsx`. "
-                "Common causes: corrupted file, password protection, or the file is not a real `.xlsx` workbook."
+                "Common causes: corrupted file, password protection, or the file is not a real `.xlsx` workbook. "
+                f"Root cause: {type(e).__name__}: {e}"
             ) from e
 
     # Fallback: let pandas attempt.
@@ -267,7 +350,7 @@ def load_value_rules(rules_source):
                 variations_norm.append(nm)
 
         if vtype_norm not in rules:
-            rules[vtype_norm] = {"wildcard": False, "allowed": set()}
+            rules[vtype_norm] = {"wildcard": False, "allowed": set(), "allowed_keys": set()}
 
         if base_norm == "any" or "any" in variations_norm:
             rules[vtype_norm]["wildcard"] = True
@@ -275,10 +358,16 @@ def load_value_rules(rules_source):
 
         if base_norm:
             rules[vtype_norm]["allowed"].add(base_norm)
+            base_key = normalize_value_key(base_norm)
+            if base_key:
+                rules[vtype_norm]["allowed_keys"].add(base_key)
 
         for nm in variations_norm:
             if nm != "any":
                 rules[vtype_norm]["allowed"].add(nm)
+                nm_key = normalize_value_key(nm)
+                if nm_key:
+                    rules[vtype_norm]["allowed_keys"].add(nm_key)
 
     return rules
 
@@ -341,14 +430,13 @@ def check_numeric_ranges(df):
             if is_empty_value(val):
                 continue
             
-            try:
-                num_val = float(str(val).replace(",", ""))
-                if num_val <= 0:
-                    invalid.append(
-                        f"Row {idx + 2}: Invalid carat value '{val}' in column '{col}' (must be > 0)"
-                    )
-            except (ValueError, TypeError):
-                pass
+            num_val = _parse_number(val)
+            if num_val is None:
+                continue
+            if num_val <= 0:
+                invalid.append(
+                    f"Row {idx + 2}: Invalid carat value '{val}' in column '{col}' (must be > 0)"
+                )
     
     price_cols = [c for c in df.columns if c in ["price_per_carat", "total_sales_price"]]
     for col in price_cols:
@@ -356,14 +444,13 @@ def check_numeric_ranges(df):
             if is_empty_value(val):
                 continue
             
-            try:
-                num_val = float(str(val).replace(",", ""))
-                if num_val <= 0:
-                    invalid.append(
-                        f"Row {idx + 2}: Invalid price '{val}' in column '{col}' (must be > 0)"
-                    )
-            except (ValueError, TypeError):
-                pass
+            num_val = _parse_number(val)
+            if num_val is None:
+                continue
+            if num_val <= 0:
+                invalid.append(
+                    f"Row {idx + 2}: Invalid price '{val}' in column '{col}' (must be > 0)"
+                )
     
     return invalid
 
@@ -389,17 +476,22 @@ def check_values(df, value_rules):
             continue
 
         allowed = rule["allowed"]
+        allowed_keys = rule.get("allowed_keys") or set()
 
         for idx, val in df[col].items():
             norm_val = normalize_value_str(val)
-
             if norm_val is None:
                 continue
 
-            if norm_val not in allowed:
-                invalid.append(
-                    f"Row {idx + 2}: Invalid '{val}' in column '{col}'"
-                )
+            # Robust matching: compare both raw normalized and key-normalized forms.
+            if norm_val in allowed:
+                continue
+
+            key = normalize_value_key(norm_val)
+            if key and key in allowed_keys:
+                continue
+
+            invalid.append(f"Row {idx + 2}: Invalid '{val}' in column '{col}'")
 
     return invalid
 
@@ -428,8 +520,12 @@ def check_mandatory(df):
         missing_cols = []
         for col in MANDATORY_COLS:
             if col in df.columns:
-                if is_empty_value(row[col]):
-                    missing_cols.append(col)
+                if col == "color":
+                    if not _color_is_satisfied(row):
+                        missing_cols.append(col)
+                else:
+                    if is_empty_value(row[col]):
+                        missing_cols.append(col)
             else:
                 missing_cols.append(col)
         
@@ -467,6 +563,15 @@ def check_all_urls(df):
         for idx, row in df.iterrows():
             for col in url_cols:
                 url = row[col] if col in df.columns else None
+                # Certificate URLs: accept only PDF/JPG/JPEG
+                if col.lower() == "cert_url_1" and not is_empty_value(url):
+                    ext = _get_url_extension(url)
+                    if ext not in {"pdf", "jpg", "jpeg"}:
+                        bad.append(
+                            f"Row {idx + 2}: {col} → UNACCEPTABLE FORMAT (expected .pdf/.jpg) → URL: {url}"
+                        )
+                        continue
+
                 future = executor.submit(fast_check_url, url)
                 tasks.append((idx, col, url, future))
 
