@@ -386,7 +386,7 @@ def build_price_mismatch_issues(df):
     return issues, count
 
 def build_excel_report(structured_issues, df=None):
-    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
 
     section_map = {
@@ -431,6 +431,8 @@ def build_excel_report(structured_issues, df=None):
     header_font = Font(bold=True, color="FFFFFF")
     header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     body_alignment = Alignment(vertical="top", wrap_text=True)
+    thin_side = Side(style="thin", color="D0D0D0")
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
     issue_type_fills = {
         "Missing Value": PatternFill("solid", fgColor="F8D7DA"),           # light red
@@ -454,6 +456,11 @@ def build_excel_report(structured_issues, df=None):
             width = min(max(10, max_len + 2), max_width)
             ws.column_dimensions[get_column_letter(col_idx)].width = width
 
+    def apply_borders(ws):
+        for r in range(1, ws.max_row + 1):
+            for c in range(1, ws.max_column + 1):
+                ws.cell(row=r, column=c).border = thin_border
+
     def style_table_sheet(ws):
         # Header styling
         ws.freeze_panes = "A2"
@@ -463,6 +470,7 @@ def build_excel_report(structured_issues, df=None):
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = header_alignment
+            cell.border = thin_border
 
         # Body styling + row color coding
         issue_type_col = None
@@ -479,12 +487,14 @@ def build_excel_report(structured_issues, df=None):
             for c in range(1, ws.max_column + 1):
                 cell = ws.cell(row=r, column=c)
                 cell.alignment = body_alignment
+                cell.border = thin_border
                 if fill:
                     cell.fill = fill
                 elif r % 2 == 0:
                     cell.fill = PatternFill("solid", fgColor="F7F7F7")  # zebra striping
 
         auto_fit_columns(ws)
+        apply_borders(ws)
 
     def col_letters_for(candidates):
         """
@@ -565,6 +575,7 @@ def build_excel_report(structured_issues, df=None):
             "Items Impacted": total_items,
             "Resolution": "",
             "Comments": "",
+            "__sheet": None,
         })
         sr += 1
 
@@ -582,10 +593,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "Yes",
                 "Impact": "Items will not be listed or searchable on the app",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_cnt + inv_cnt),
                 "Resolution": "Please provide accepted Shape values as per VDB standardized list.",
                 "Comments": "",
+                "__sheet": "2. Shape",
             })
             sr += 1
 
@@ -603,10 +615,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "Yes",
                 "Impact": "Items will not be listed or searchable on the app",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_cnt + inv_cnt),
                 "Resolution": "Please provide accepted Clarity values for all affected items.",
                 "Comments": "",
+                "__sheet": "5. Clarity",
             })
             sr += 1
 
@@ -624,10 +637,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "Yes",
                 "Impact": "Items will not be listed or searchable on the app",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_cnt + inv_cnt),
                 "Resolution": "Please provide White color under Color, and Fancy color/intensity under the respective Fancy Color columns.",
                 "Comments": "",
+                "__sheet": "4. Color",
             })
             sr += 1
 
@@ -653,10 +667,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "Yes",
                 "Impact": "Items may be visible with incorrect or missing prices on the app",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_ppc + inv_ppc_cnt + m_tsp + inv_tsp_cnt + mismatch_cnt),
                 "Resolution": "Please provide correct Price Per Carat and Total Sales Price for all affected items.",
                 "Comments": "",
+                "__sheet": "9. Price",
             })
             sr += 1
 
@@ -674,10 +689,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "No",
                 "Impact": "Items would be visible without images on the app",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_img + bad_img),
                 "Resolution": "Please provide direct, public image URLs to show them on the app.",
                 "Comments": "",
+                "__sheet": "6. Image URL",
             })
             sr += 1
 
@@ -695,10 +711,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "No",
                 "Impact": "Videos would not be visible under the media section for these stocks",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_vid + bad_vid),
                 "Resolution": "Please provide direct source links to show the videos on the app.",
                 "Comments": "",
+                "__sheet": "7. Video URL",
             })
             sr += 1
 
@@ -716,10 +733,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "No",
                 "Impact": "Certificate would not be visible on the app for these items",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(m_cert + bad_cert),
                 "Resolution": "Provide direct certificate URLs (accepted formats: .pdf/.jpg/.jpeg).",
                 "Comments": "",
+                "__sheet": "8. Certificate URL",
             })
             sr += 1
 
@@ -735,10 +753,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": f"Cut:\n- We are not getting Cut value for {cut_missing} item(s) which have Round shape in your feed.",
                 "Critical": "No",
                 "Impact": "Cut value would not be visible on the app for these items",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(cut_missing),
                 "Resolution": "Please provide Cut value for Round stones to show it on the app.",
                 "Comments": "",
+                "__sheet": "10. Other Issues / Cut Grade",
             })
             sr += 1
 
@@ -756,10 +775,11 @@ def build_excel_report(structured_issues, df=None):
                 "Issue": "\n".join(parts),
                 "Critical": "No",
                 "Impact": "Availability would not be visible/accurate on the app for these items",
-                "Link": "",
+                "Link": "Go to sheet",
                 "Items Impacted": int(a_m + a_inv_cnt),
                 "Resolution": "Please provide accepted Availability values for all affected items.",
                 "Comments": "",
+                "__sheet": "10. Other Issues / Cut Grade",
             })
             sr += 1
 
@@ -768,7 +788,8 @@ def build_excel_report(structured_issues, df=None):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         # Summary sheet first (client-facing)
-        df_summary = pd.DataFrame(build_summary_rows(), columns=[
+        _summary_rows = build_summary_rows()
+        df_summary = pd.DataFrame(_summary_rows, columns=[
             "Sr. No.",
             "Issue Column",
             "Issue",
@@ -778,8 +799,11 @@ def build_excel_report(structured_issues, df=None):
             "Items Impacted",
             "Resolution",
             "Comments",
+            "__sheet",
         ])
-        df_summary.to_excel(writer, sheet_name="Summary", index=False)
+        # Hide internal column
+        df_summary_out = df_summary.drop(columns=["__sheet"], errors="ignore")
+        df_summary_out.to_excel(writer, sheet_name="Summary", index=False)
 
         # Write detail sheets (only those with issues)
         for sheet_name in sorted(issues_by_sheet.keys()):
@@ -804,15 +828,32 @@ def build_excel_report(structured_issues, df=None):
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = header_alignment
+            cell.border = thin_border
         for r in range(2, ws_sum.max_row + 1):
             for c in range(1, ws_sum.max_column + 1):
-                ws_sum.cell(row=r, column=c).alignment = body_alignment
+                cell = ws_sum.cell(row=r, column=c)
+                cell.alignment = body_alignment
+                cell.border = thin_border
         auto_fit_columns(ws_sum, max_width=95)
         # Make Issue/Resolution columns wider
         if ws_sum.max_column >= 3:
             ws_sum.column_dimensions[get_column_letter(3)].width = 55
         if ws_sum.max_column >= 8:
             ws_sum.column_dimensions[get_column_letter(8)].width = 55
+
+        # Add sheet jump links in "Link" column (F)
+        link_col_idx = 6
+        for i, row in enumerate(_summary_rows, start=2):  # + header row
+            target = row.get("__sheet")
+            if not target:
+                continue
+            if target not in wb.sheetnames:
+                continue
+            cell = ws_sum.cell(row=i, column=link_col_idx)
+            cell.value = f"=HYPERLINK(\"#'{target}'!A1\",\"Go to sheet\")"
+            cell.style = "Hyperlink"
+
+        apply_borders(ws_sum)
 
         # Detail sheet styling
         for name in wb.sheetnames:
@@ -829,7 +870,9 @@ def build_excel_report(structured_issues, df=None):
                 cell.fill = header_fill
                 cell.font = header_font
                 cell.alignment = header_alignment
+                cell.border = thin_border
             auto_fit_columns(ws)
+            apply_borders(ws)
                 
     buffer.seek(0)
     return buffer
