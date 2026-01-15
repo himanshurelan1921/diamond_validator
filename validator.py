@@ -3,6 +3,7 @@ import requests
 import math
 import unicodedata
 import argparse
+import io
 from concurrent.futures import ThreadPoolExecutor
 import re
 
@@ -76,6 +77,123 @@ def is_empty_value(value):
         return True
     
     return False
+
+
+# ------------------------------------------------------------
+# SUPPLIER FILE LOADING (CSV/XLSX)
+# ------------------------------------------------------------
+
+def _score_columns_against_header_map(columns, header_map):
+    """
+    Score how likely a header row is by counting matches against known header variants.
+    """
+    if not header_map:
+        return 0
+
+    score = 0
+    for col in list(columns):
+        norm = normalize_header_name(col)
+        if norm and norm in header_map:
+            score += 1
+    return score
+
+
+def _unnamed_column_count(columns):
+    count = 0
+    for c in list(columns):
+        s = str(c) if c is not None else ""
+        if s.startswith("Unnamed:"):
+            count += 1
+    return count
+
+
+def detect_best_excel_layout(file_bytes, header_map=None, sheet_name=None, max_header_row=6):
+    """
+    Detect best (sheet_name, header_row) for an uploaded XLSX by:
+    - trying multiple sheets (unless sheet_name provided)
+    - trying header rows 0..max_header_row-1
+    - picking the combo with the most header_map matches, then fewest Unnamed columns.
+    """
+    if not file_bytes:
+        raise ValueError("The uploaded XLSX file is empty.")
+
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+    except Exception as e:
+        raise ValueError(
+            "Unable to read the uploaded Excel file. Please ensure it is a valid, non-password-protected `.xlsx` "
+            "(not `.xls` or a renamed non-Excel file)."
+        ) from e
+
+    if not getattr(xls, "sheet_names", None):
+        raise ValueError(
+            "This Excel workbook contains 0 worksheets. Please re-export or resave it as a standard `.xlsx` file."
+        )
+    sheets = [sheet_name] if sheet_name else list(xls.sheet_names)
+    header_rows = range(0, max_header_row)
+
+    best = None  # (score, -unnamed, -num_cols, sheet, header_row)
+    for sh in sheets:
+        for hr in header_rows:
+            try:
+                probe = pd.read_excel(xls, sheet_name=sh, header=hr, nrows=0)
+            except Exception:
+                continue
+            cols = list(probe.columns)
+            score = _score_columns_against_header_map(cols, header_map)
+            unnamed = _unnamed_column_count(cols)
+            num_cols = len(cols)
+            candidate = (score, -unnamed, -num_cols, sh, hr)
+            if best is None or candidate > best:
+                best = candidate
+
+    if best is None:
+        # Fallback: first sheet, first row
+        return (xls.sheet_names[0], 0)
+
+    return (best[3], best[4])
+
+
+def load_supplier_bytes(file_bytes, filename, header_map=None, sheet_name=None):
+    """
+    Load supplier inventory file content (bytes) into a DataFrame.
+    Returns: (df, meta)
+    """
+    ext = filename.rsplit(".", 1)[-1].lower() if filename and "." in filename else ""
+    meta = {"ext": ext, "sheet_name": None, "header_row": None}
+
+    if ext == "csv":
+        df = pd.read_csv(io.BytesIO(file_bytes))
+        return df, meta
+
+    if ext == "xlsx":
+        try:
+            best_sheet, best_header = detect_best_excel_layout(
+                file_bytes=file_bytes,
+                header_map=header_map,
+                sheet_name=sheet_name,
+            )
+            meta["sheet_name"] = best_sheet
+            meta["header_row"] = best_header
+            df = pd.read_excel(
+                io.BytesIO(file_bytes),
+                sheet_name=best_sheet,
+                header=best_header,
+                engine="openpyxl",
+            )
+            return df, meta
+        except Exception as e:
+            raise ValueError(
+                "Failed to load the uploaded `.xlsx`. "
+                "Common causes: corrupted file, password protection, or the file is not a real `.xlsx` workbook."
+            ) from e
+
+    # Fallback: let pandas attempt.
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+        return df, meta
+    except Exception as e:
+        raise ValueError("Failed to load the uploaded file.") from e
 
 
 # ------------------------------------------------------------
@@ -169,11 +287,18 @@ def load_value_rules(rules_source):
 # LOAD SUPPLIER FILE
 # ------------------------------------------------------------
 
-def load_supplier(path):
+def load_supplier(path, header_map=None, sheet_name=None):
     ext = path.split(".")[-1].lower()
     if ext == "csv":
         return pd.read_csv(path)
-    return pd.read_excel(path)
+    if ext == "xlsx" and header_map:
+        with open(path, "rb") as f:
+            b = f.read()
+        df, _meta = load_supplier_bytes(b, filename=path, header_map=header_map, sheet_name=sheet_name)
+        return df
+    if ext == "xlsx":
+        return pd.read_excel(path, engine="openpyxl", sheet_name=sheet_name if sheet_name else 0)
+    return pd.read_excel(path, sheet_name=sheet_name if sheet_name else 0)
 
 
 # ------------------------------------------------------------
@@ -365,6 +490,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("supplier", help="Supplier CSV/XLSX")
     parser.add_argument("--rules", default="headers.xlsx")
+    parser.add_argument("--sheet", default=None, help="Excel sheet name (XLSX only)")
     args = parser.parse_args()
 
     print("Loading rules...")
@@ -372,7 +498,7 @@ def main():
     value_rules = load_value_rules(args.rules)
 
     print("Loading supplier file...")
-    df = load_supplier(args.supplier)
+    df = load_supplier(args.supplier, header_map=header_map, sheet_name=args.sheet)
 
     print("Normalizing headers...")
     df, unknown_headers = normalize_headers(df, header_map)
