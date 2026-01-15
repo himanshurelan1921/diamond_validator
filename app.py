@@ -540,7 +540,7 @@ def build_excel_report(structured_issues, df=None):
         invalid_values = set()
         invalid_count = 0
         for issue in structured_issues:
-            col = (issue.get("Column") or "").lower()
+            col = validator.normalize_header_name(issue.get("Column"))
             itype = issue.get("Issue Type") or ""
             if col != col_key:
                 continue
@@ -560,7 +560,7 @@ def build_excel_report(structured_issues, df=None):
         missing_count = 0
         bad_count = 0
         for issue in structured_issues:
-            col = (issue.get("Column") or "").lower()
+            col = validator.normalize_header_name(issue.get("Column"))
             if col != col_key:
                 continue
             itype = issue.get("Issue Type") or ""
@@ -596,6 +596,22 @@ def build_excel_report(structured_issues, df=None):
             return total
 
         total_items = compute_total_items()
+        def compute_total_impacted_items():
+            impacted = set()
+            max_row = (len(df) + 1) if df is not None and not getattr(df, "empty", True) else None
+            for issue in structured_issues:
+                try:
+                    r = int(issue.get("Row"))
+                except Exception:
+                    continue
+                if r < 2:
+                    continue
+                if max_row is not None and r > max_row:
+                    continue
+                impacted.add(r)
+            return len(impacted)
+
+        impacted_items = compute_total_impacted_items()
 
         # Stock Number
         m_cnt, inv_vals, inv_cnt = summarize_column("stock_num")
@@ -616,6 +632,44 @@ def build_excel_report(structured_issues, df=None):
                 "Resolution": "Please provide unique Stock Number for all items.",
                 "Comments": "",
                 "__sheet": "1. Stock Number",
+            })
+            sr += 1
+
+        # Weight / Carat (critical)
+        weight_keys = {"size", "carat", "weight", "carat_weight"}
+        w_missing = 0
+        w_invalid = 0
+        w_invalid_vals = set()
+        for issue in structured_issues:
+            col = validator.normalize_header_name(issue.get("Column"))
+            if col not in weight_keys:
+                continue
+            itype = issue.get("Issue Type") or ""
+            if itype == "Missing Value":
+                w_missing += 1
+            if itype in {"Invalid Value", "Invalid Numeric Value"}:
+                w_invalid += 1
+                v = issue.get("Value")
+                if v is not None and str(v).strip() != "":
+                    w_invalid_vals.add(str(v).strip())
+
+        if w_missing or w_invalid:
+            parts = ["Weight:"]
+            if w_missing:
+                parts.append(f"- The value is missing for {w_missing} item(s) in your inventory file.")
+            if w_invalid_vals:
+                parts.append(f"- We are receiving the value(s) {clip_list(sorted(w_invalid_vals))} under this column which is not accepted.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for(weight_keys),
+                "Issue": "\n".join(parts),
+                "Critical": "Yes",
+                "Impact": "Items will not be listed or searchable on the app",
+                "Link": "Go to sheet",
+                "Items Impacted": int(w_missing + w_invalid),
+                "Resolution": "Please provide correct Weight/Carat values (> 00).",
+                "Comments": "",
+                "__sheet": "3. Weight",
             })
             sr += 1
 
@@ -823,17 +877,17 @@ def build_excel_report(structured_issues, df=None):
             })
             sr += 1
 
-        # Total Items (move to last row as requested)
+        # Totals (footer)
         rows.append({
             "Sr. No.": sr,
             "Issue Column": "",
-            "Issue": "Total Items",
+            "Issue": "Total Impacted Items",
             "Critical": "",
             "Impact": "",
             "Link": "",
-            "Items Impacted": total_items,
+            "Items Impacted": impacted_items,
             "Resolution": "",
-            "Comments": "",
+            "Comments": f"Total items in file: {total_items}",
             "__sheet": None,
         })
 
