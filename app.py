@@ -5,6 +5,7 @@ import re
 import math
 import json
 import uuid
+import time
 from collections import Counter
 import validator
 import os
@@ -48,6 +49,43 @@ st.markdown("""
 Upload your **supplier inventory file** to validate against the internal rule set.
 """)
 st.caption(f"Build: `{_get_build_info()}`")
+
+# Light UI polish (AI-like processing panel)
+st.markdown(
+    """
+    <style>
+      .ai-card {
+        border: 1px solid rgba(0,0,0,0.08);
+        border-radius: 12px;
+        padding: 14px 14px 10px 14px;
+        background: rgba(255,255,255,0.85);
+      }
+      .ai-title {
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        margin-bottom: 6px;
+      }
+      .ai-sub {
+        color: rgba(0,0,0,0.65);
+        font-size: 0.92rem;
+        margin-bottom: 12px;
+      }
+      .ai-bar {
+        height: 8px;
+        width: 100%;
+        border-radius: 99px;
+        background: linear-gradient(90deg, #0f62fe, #8a3ffc, #0f62fe);
+        background-size: 200% 100%;
+        animation: aiMove 1.2s linear infinite;
+      }
+      @keyframes aiMove {
+        0% { background-position: 0% 50%; }
+        100% { background-position: 200% 50%; }
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ------------------------------------------------------------
 # UI HELPERS
@@ -1229,18 +1267,36 @@ if start_btn and supplier_file:
     if not os.path.exists(rules_path):
         st.error(f"Configuration error: The rules file ({rules_path}) was not found.")
         st.stop()
-        
-    st.info("📘 Loading rules…")
+
+    ai_panel = st.container()
+    with ai_panel:
+        st.markdown(
+            """
+            <div class="ai-card">
+              <div class="ai-title">AI Validation Engine</div>
+              <div class="ai-sub">Analyzing your inventory and generating a ready-to-send supplier email + report.</div>
+              <div class="ai-bar"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    run_status = st.status("Running AI checks…", expanded=True)
+    run_status.write("Initializing…")
+    time.sleep(0.05)
+
+    run_status.update(label="Loading rule set…", state="running")
     try:
         header_map, canonical_set = validator.load_header_rules(rules_path)
         value_rules = validator.load_value_rules(rules_path)
-        st.success("Rules loaded successfully.")
+        run_status.write("Rules loaded.")
         
     except Exception as e:
+        run_status.update(label="Failed to load rules.", state="error")
         st.error(f"Failed to load rules. Error: {e}")
         st.stop()
     
-    st.info("📄 Loading supplier inventory…")
+    run_status.update(label="Parsing supplier file…", state="running")
     supplier_bytes = supplier_file.read()
     ext = supplier_file.name.split(".")[-1].lower()
 
@@ -1251,6 +1307,7 @@ if start_btn and supplier_file:
             header_map=header_map,
         )
     except Exception as e:
+        run_status.update(label="Failed to read supplier file.", state="error")
         st.error(
             "Failed to read the uploaded inventory file. "
             "If this is an Excel file, please ensure it is a valid, non-password-protected `.xlsx` "
@@ -1268,21 +1325,26 @@ if start_btn and supplier_file:
     progress = st.progress(0)
     status = st.empty()
 
+    run_status.update(label="Normalizing headers…", state="running")
     status.text("Normalizing headers…")
     df, unknown_headers = validator.normalize_headers(df, header_map)
     progress.progress(12)
 
+    run_status.write("Headers normalized.")
+    run_status.update(label="Checking mandatory fields…", state="running")
     status.text("Checking mandatory fields…")
     missing_strings = validator.check_mandatory(df)
     mandatory_issues, missing_by_col = build_mandatory_issues(df)
     missing_stock_count = sum(1 for issue in mandatory_issues if issue["Column"] == "stock_num")
     progress.progress(25)
 
+    run_status.update(label="Checking numeric ranges…", state="running")
     status.text("Checking numeric ranges…")
     numeric_invalid_strings = validator.check_numeric_ranges(df)
     numeric_invalid_issues, numeric_invalid_by_col = parse_numeric_invalid_strings(numeric_invalid_strings, df)
     progress.progress(40)
 
+    run_status.update(label="Validating values…", state="running")
     status.text("Validating values…")
     invalid_strings = validator.check_values(df, value_rules)
     invalid_issues, invalid_shape_values, invalid_color_values, invalid_by_col = parse_invalid_value_strings(invalid_strings, df)
@@ -1291,16 +1353,19 @@ if start_btn and supplier_file:
     for col, count in numeric_invalid_by_col.items():
         invalid_by_col[col] += count
 
+    run_status.update(label="Checking URLs…", state="running")
     status.text("Checking URLs… (fast mode)")
     url_strings = validator.check_all_urls(df)
     url_issues_struct, url_counts = parse_url_issue_strings(url_strings, df)
     progress.progress(75)
 
+    run_status.update(label="Checking cut grade and price consistency…", state="running")
     status.text("Checking cut grade and price consistency…")
     cut_issues, cut_missing_count = find_missing_cut_grade(df)
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
     progress.progress(90)
 
+    run_status.update(label="Generating report + email draft…", state="running")
     status.text("Building reports…")
     structured_issues = []
     structured_issues.extend(mandatory_issues)
@@ -1326,6 +1391,8 @@ if start_btn and supplier_file:
     
     progress.progress(100)
     status.text("✅ Validation completed!")
+    run_status.update(label="Validation completed.", state="complete")
+    st.balloons()
 
     st.session_state.validation_complete = True
     st.session_state.validation_results = {
