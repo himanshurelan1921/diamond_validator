@@ -544,10 +544,15 @@ if start_btn and supplier_file:
     supplier_bytes = supplier_file.read()
     ext = supplier_file.name.split(".")[-1].lower()
 
-    if ext == "csv":
-        df = pd.read_csv(io.BytesIO(supplier_bytes))
-    else:
-        df = pd.read_excel(io.BytesIO(supplier_bytes))
+    df, load_meta = validator.load_supplier_bytes(
+        file_bytes=supplier_bytes,
+        filename=supplier_file.name,
+        header_map=header_map,
+    )
+    if ext == "xlsx" and load_meta.get("sheet_name") is not None:
+        st.caption(
+            f"XLSX detected. Using sheet **{load_meta['sheet_name']}** with header row **{load_meta['header_row'] + 1}**."
+        )
 
     st.success(f"Supplier file loaded: **{len(df)} rows**")
 
