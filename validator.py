@@ -352,7 +352,10 @@ def load_value_rules(rules_source):
         if vtype_norm not in rules:
             rules[vtype_norm] = {"wildcard": False, "allowed": set(), "allowed_keys": set()}
 
-        if base_norm == "any" or "any" in variations_norm:
+        # Wildcard: only when the Base Value itself is "any".
+        # (Some rulesheets contain "any" in the variations column for a specific base value;
+        # we treat that as a non-wildcard and simply ignore "any" as a variation.)
+        if base_norm == "any":
             rules[vtype_norm]["wildcard"] = True
             continue
 
