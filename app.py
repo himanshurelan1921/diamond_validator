@@ -11,11 +11,40 @@ import os
 # STREAMLIT SETUP
 # ------------------------------------------------------------
 
+def _get_build_info():
+    """
+    Best-effort build identifier for Streamlit Cloud debugging.
+    Tries common env vars first, then falls back to local git metadata if available.
+    """
+    for k in ("GIT_SHA", "GITHUB_SHA", "COMMIT_SHA", "SOURCE_VERSION"):
+        v = os.environ.get(k)
+        if v:
+            return v[:12]
+
+    try:
+        head_path = os.path.join(os.path.dirname(__file__), ".git", "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(" ", 1)[1].strip()
+            ref_path = os.path.join(os.path.dirname(__file__), ".git", *ref.split("/"))
+            if os.path.exists(ref_path):
+                with open(ref_path, "r", encoding="utf-8") as rf:
+                    sha = rf.read().strip()
+                    return sha[:12] if sha else "unknown"
+        return head[:12] if head else "unknown"
+    except Exception:
+        return "unknown"
+
+
 st.set_page_config(page_title="Diamond Inventory Validator", layout="wide")
 st.title("Diamond & Lab-Grown Inventory Validator")
 st.markdown("""
 Upload your **supplier inventory file** to validate against the internal rule set.
 """)
+st.caption(f"Build: `{_get_build_info()}`")
 
 # ------------------------------------------------------------
 # HELPERS
