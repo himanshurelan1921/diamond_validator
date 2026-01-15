@@ -107,6 +107,16 @@ def _unnamed_column_count(columns):
     return count
 
 
+def _looks_like_xlsx(file_bytes):
+    """
+    XLSX files are ZIP containers; they typically start with 'PK'.
+    This quickly detects common user mistakes like renaming a CSV to .xlsx.
+    """
+    if not file_bytes or len(file_bytes) < 2:
+        return False
+    return file_bytes[:2] == b"PK"
+
+
 def detect_best_excel_layout(file_bytes, header_map=None, sheet_name=None, max_header_row=6):
     """
     Detect best (sheet_name, header_row) for an uploaded XLSX by:
@@ -115,14 +125,21 @@ def detect_best_excel_layout(file_bytes, header_map=None, sheet_name=None, max_h
     - picking the combo with the most header_map matches, then fewest Unnamed columns.
     """
     if not file_bytes:
-        raise ValueError("The uploaded XLSX file is empty.")
+        raise ValueError("The uploaded `.xlsx` file is empty.")
+
+    if not _looks_like_xlsx(file_bytes):
+        raise ValueError(
+            "This file does not look like a real `.xlsx` workbook (it is not a ZIP-based Excel file). "
+            "If you started from a CSV, either upload the `.csv` directly or re-save/export as an **Excel Workbook (.xlsx)** "
+            "from Excel/Sheets (not by renaming the file extension)."
+        )
 
     try:
         xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
     except Exception as e:
         raise ValueError(
             "Unable to read the uploaded Excel file. Please ensure it is a valid, non-password-protected `.xlsx` "
-            "(not `.xls` or a renamed non-Excel file)."
+            f"(not `.xls` or a renamed non-Excel file). Root cause: {type(e).__name__}: {e}"
         ) from e
 
     if not getattr(xls, "sheet_names", None):
@@ -185,7 +202,8 @@ def load_supplier_bytes(file_bytes, filename, header_map=None, sheet_name=None):
         except Exception as e:
             raise ValueError(
                 "Failed to load the uploaded `.xlsx`. "
-                "Common causes: corrupted file, password protection, or the file is not a real `.xlsx` workbook."
+                "Common causes: corrupted file, password protection, or the file is not a real `.xlsx` workbook. "
+                f"Root cause: {type(e).__name__}: {e}"
             ) from e
 
     # Fallback: let pandas attempt.

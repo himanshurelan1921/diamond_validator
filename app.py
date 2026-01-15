@@ -583,7 +583,7 @@ if start_btn and supplier_file:
         st.error(
             "Failed to read the uploaded inventory file. "
             "If this is an Excel file, please ensure it is a valid, non-password-protected `.xlsx` "
-            "(not `.xls` and not a renamed file)."
+            "(not `.xls` and not a renamed file). If you started from a `.csv`, you can upload the `.csv` directly."
         )
         st.exception(e)
         st.stop()
