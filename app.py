@@ -385,10 +385,9 @@ def build_price_mismatch_issues(df):
 
     return issues, count
 
-def build_excel_report(structured_issues):
+def build_excel_report(structured_issues, df=None):
     from openpyxl.styles import Font, Alignment, PatternFill
     from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     section_map = {
         "stock_num": "1. Stock Number",
@@ -487,40 +486,299 @@ def build_excel_report(structured_issues):
 
         auto_fit_columns(ws)
 
-        # Add a nice table style (Excel-native)
-        try:
-            table_name = re.sub(r"[^A-Za-z0-9_]", "_", ws.title)[:30]
-            tab = Table(displayName=f"T_{table_name}", ref=ws.dimensions)
-            tab.tableStyleInfo = TableStyleInfo(
-                name="TableStyleMedium9",
-                showFirstColumn=False,
-                showLastColumn=False,
-                showRowStripes=False,  # we do our own striping
-                showColumnStripes=False,
-            )
-            ws.add_table(tab)
-        except Exception:
-            pass
+    def col_letters_for(candidates):
+        """
+        Map canonical-ish columns to Excel column letters based on current df ordering.
+        """
+        if df is None or getattr(df, "empty", True):
+            return ""
+        letters = []
+        for idx, c in enumerate(list(df.columns), start=1):
+            n = validator.normalize_header_name(c)
+            if n in candidates:
+                letters.append(get_column_letter(idx))
+        if not letters:
+            return ""
+        if len(letters) == 1:
+            return f"Column {letters[0]}"
+        return "Column " + " & ".join(letters)
+
+    def summarize_column(col_key):
+        """
+        Return (missing_count, invalid_values_set, invalid_count) for a canonical column key.
+        """
+        missing_count = 0
+        invalid_values = set()
+        invalid_count = 0
+        for issue in structured_issues:
+            col = (issue.get("Column") or "").lower()
+            itype = issue.get("Issue Type") or ""
+            if col != col_key:
+                continue
+            if itype == "Missing Value":
+                missing_count += 1
+            if itype in {"Invalid Value", "Invalid Numeric Value"}:
+                invalid_count += 1
+                v = issue.get("Value")
+                if v is not None and str(v).strip() != "":
+                    invalid_values.add(str(v).strip())
+        return missing_count, invalid_values, invalid_count
+
+    def summarize_urls(col_key):
+        """
+        Return missing_count and bad_count for URL columns.
+        """
+        missing_count = 0
+        bad_count = 0
+        for issue in structured_issues:
+            col = (issue.get("Column") or "").lower()
+            if col != col_key:
+                continue
+            itype = issue.get("Issue Type") or ""
+            if itype == "Missing URL":
+                missing_count += 1
+            elif itype == "URL Error":
+                bad_count += 1
+        return missing_count, bad_count
+
+    def clip_list(values, limit=20):
+        values = [v for v in values if v is not None and str(v).strip() != ""]
+        values = list(dict.fromkeys(values))  # stable unique
+        if len(values) <= limit:
+            return ", ".join(values)
+        return ", ".join(values[:limit]) + f" ... (+{len(values) - limit} more)"
+
+    def build_summary_rows():
+        """
+        Build a client-facing summary table similar to the requested template.
+        """
+        rows = []
+        sr = 1
+        total_items = len(df) if df is not None else ""
+        rows.append({
+            "Sr. No.": sr,
+            "Issue Column": "",
+            "Issue": "Total Items",
+            "Critical": "",
+            "Impact": "",
+            "Link": "",
+            "Items Impacted": total_items,
+            "Resolution": "",
+            "Comments": "",
+        })
+        sr += 1
+
+        # Shape
+        m_cnt, inv_vals, inv_cnt = summarize_column("shape")
+        if m_cnt or inv_cnt:
+            parts = ["Shape:"]
+            if m_cnt:
+                parts.append(f"- The value is missing for {m_cnt} item(s) in your inventory file.")
+            if inv_vals:
+                parts.append(f"- We are receiving the value(s) {clip_list(sorted(inv_vals))} under this column which is not accepted.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"shape"}),
+                "Issue": "\n".join(parts),
+                "Critical": "Yes",
+                "Impact": "Items will not be listed or searchable on the app",
+                "Link": "",
+                "Items Impacted": int(m_cnt + inv_cnt),
+                "Resolution": "Please provide accepted Shape values as per VDB standardized list.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Clarity
+        m_cnt, inv_vals, inv_cnt = summarize_column("clarity")
+        if m_cnt or inv_cnt:
+            parts = ["Clarity:"]
+            if m_cnt:
+                parts.append(f"- The value is missing for {m_cnt} item(s) in your inventory file.")
+            if inv_vals:
+                parts.append(f"- We are receiving the value(s) {clip_list(sorted(inv_vals))} under this column which is not accepted.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"clarity"}),
+                "Issue": "\n".join(parts),
+                "Critical": "Yes",
+                "Impact": "Items will not be listed or searchable on the app",
+                "Link": "",
+                "Items Impacted": int(m_cnt + inv_cnt),
+                "Resolution": "Please provide accepted Clarity values for all affected items.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Color
+        m_cnt, inv_vals, inv_cnt = summarize_column("color")
+        if m_cnt or inv_cnt:
+            parts = ["Color:"]
+            if m_cnt:
+                parts.append(f"- The value is missing for {m_cnt} item(s) in your inventory file.")
+            if inv_vals:
+                parts.append(f"- We are receiving the value(s) {clip_list(sorted(inv_vals))} under this column which is not accepted.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"color", "fancy_color_dominant_color", "fancy_color_intensity"}),
+                "Issue": "\n".join(parts),
+                "Critical": "Yes",
+                "Impact": "Items will not be listed or searchable on the app",
+                "Link": "",
+                "Items Impacted": int(m_cnt + inv_cnt),
+                "Resolution": "Please provide White color under Color, and Fancy color/intensity under the respective Fancy Color columns.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Price + mismatches
+        m_ppc, inv_ppc_vals, inv_ppc_cnt = summarize_column("price_per_carat")
+        m_tsp, inv_tsp_vals, inv_tsp_cnt = summarize_column("total_sales_price")
+        mismatch_cnt = sum(1 for i in structured_issues if i.get("Issue Type") == "Price Mismatch")
+        if m_ppc or inv_ppc_cnt or m_tsp or inv_tsp_cnt or mismatch_cnt:
+            parts = ["Price & Total Price:"]
+            if m_ppc:
+                parts.append(f"- Price per carat is missing for {m_ppc} item(s).")
+            if m_tsp:
+                parts.append(f"- Total sales price is missing for {m_tsp} item(s).")
+            if inv_ppc_vals:
+                parts.append(f"- Invalid Price per carat value(s): {clip_list(sorted(inv_ppc_vals))}.")
+            if inv_tsp_vals:
+                parts.append(f"- Invalid Total sales price value(s): {clip_list(sorted(inv_tsp_vals))}.")
+            if mismatch_cnt:
+                parts.append(f"- For {mismatch_cnt} item(s), Total Sales Price does not match (Carat x Price Per Carat).")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"price_per_carat", "total_sales_price", "total_price", "amount", "total"}),
+                "Issue": "\n".join(parts),
+                "Critical": "Yes",
+                "Impact": "Items may be visible with incorrect or missing prices on the app",
+                "Link": "",
+                "Items Impacted": int(m_ppc + inv_ppc_cnt + m_tsp + inv_tsp_cnt + mismatch_cnt),
+                "Resolution": "Please provide correct Price Per Carat and Total Sales Price for all affected items.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Image URLs
+        m_img, bad_img = summarize_urls("image_url_1")
+        if m_img or bad_img:
+            parts = ["Image URLs:"]
+            if m_img:
+                parts.append(f"- Image URLs are missing for {m_img} item(s) in your feed.")
+            if bad_img:
+                parts.append(f"- {bad_img} image URL(s) are not working or invalid.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"image_url_1"}),
+                "Issue": "\n".join(parts),
+                "Critical": "No",
+                "Impact": "Items would be visible without images on the app",
+                "Link": "",
+                "Items Impacted": int(m_img + bad_img),
+                "Resolution": "Please provide direct, public image URLs to show them on the app.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Video URLs
+        m_vid, bad_vid = summarize_urls("video_url_1")
+        if m_vid or bad_vid:
+            parts = ["Video URLs:"]
+            if m_vid:
+                parts.append(f"- Video URLs are missing for {m_vid} item(s) in your feed.")
+            if bad_vid:
+                parts.append(f"- {bad_vid} video URL(s) are not working or invalid.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"video_url_1"}),
+                "Issue": "\n".join(parts),
+                "Critical": "No",
+                "Impact": "Videos would not be visible under the media section for these stocks",
+                "Link": "",
+                "Items Impacted": int(m_vid + bad_vid),
+                "Resolution": "Please provide direct source links to show the videos on the app.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Certificate URLs
+        m_cert, bad_cert = summarize_urls("cert_url_1")
+        if m_cert or bad_cert:
+            parts = ["Certificate Links:"]
+            if m_cert:
+                parts.append(f"- We are not getting the certificate URLs for {m_cert} item(s) in your feed.")
+            if bad_cert:
+                parts.append(f"- {bad_cert} certificate URL(s) are not working or unacceptable format (only .pdf/.jpg allowed).")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"cert_url_1"}),
+                "Issue": "\n".join(parts),
+                "Critical": "No",
+                "Impact": "Certificate would not be visible on the app for these items",
+                "Link": "",
+                "Items Impacted": int(m_cert + bad_cert),
+                "Resolution": "Provide direct certificate URLs (accepted formats: .pdf/.jpg/.jpeg).",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Cut (Round only)
+        cut_missing = sum(
+            1 for i in structured_issues
+            if (i.get("Issue Type") == "Missing Value" and (i.get("Column") or "").lower() in {"cut", "cut_grade"})
+        )
+        if cut_missing:
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"cut", "cut_grade"}),
+                "Issue": f"Cut:\n- We are not getting Cut value for {cut_missing} item(s) which have Round shape in your feed.",
+                "Critical": "No",
+                "Impact": "Cut value would not be visible on the app for these items",
+                "Link": "",
+                "Items Impacted": int(cut_missing),
+                "Resolution": "Please provide Cut value for Round stones to show it on the app.",
+                "Comments": "",
+            })
+            sr += 1
+
+        # Availability
+        a_m, a_inv_vals, a_inv_cnt = summarize_column("availability")
+        if a_m or a_inv_cnt:
+            parts = ["Availability:"]
+            if a_m:
+                parts.append(f"- We are not getting the Availability for {a_m} item(s) in your feed.")
+            if a_inv_vals:
+                parts.append(f"- We are receiving the value(s) {clip_list(sorted(a_inv_vals))} under this column which is not accepted.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"availability"}),
+                "Issue": "\n".join(parts),
+                "Critical": "No",
+                "Impact": "Availability would not be visible/accurate on the app for these items",
+                "Link": "",
+                "Items Impacted": int(a_m + a_inv_cnt),
+                "Resolution": "Please provide accepted Availability values for all affected items.",
+                "Comments": "",
+            })
+            sr += 1
+
+        return rows
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        # Summary sheet first
-        total_issues = len(structured_issues)
-        section_counts = {k: len(v) for k, v in issues_by_sheet.items() if v}
-        issue_type_counts = Counter([i.get("Issue Type", "Unknown") for i in structured_issues])
-
-        summary_rows = []
-        summary_rows.append(("Total issues", total_issues))
-        summary_rows.append(("", ""))
-        summary_rows.append(("By section", "Count"))
-        for sec in sorted(section_counts.keys()):
-            summary_rows.append((sec, section_counts[sec]))
-        summary_rows.append(("", ""))
-        summary_rows.append(("By issue type", "Count"))
-        for it in sorted(issue_type_counts.keys()):
-            summary_rows.append((it, issue_type_counts[it]))
-
-        df_summary = pd.DataFrame(summary_rows, columns=["Summary", "Value"])
+        # Summary sheet first (client-facing)
+        df_summary = pd.DataFrame(build_summary_rows(), columns=[
+            "Sr. No.",
+            "Issue Column",
+            "Issue",
+            "Critical",
+            "Impact",
+            "Link",
+            "Items Impacted",
+            "Resolution",
+            "Comments",
+        ])
         df_summary.to_excel(writer, sheet_name="Summary", index=False)
 
         # Write detail sheets (only those with issues)
@@ -540,6 +798,7 @@ def build_excel_report(structured_issues):
         # Summary styling
         ws_sum = wb["Summary"]
         ws_sum.freeze_panes = "A2"
+        ws_sum.auto_filter.ref = ws_sum.dimensions
         ws_sum.row_dimensions[1].height = 22
         for cell in ws_sum[1]:
             cell.fill = header_fill
@@ -548,7 +807,12 @@ def build_excel_report(structured_issues):
         for r in range(2, ws_sum.max_row + 1):
             for c in range(1, ws_sum.max_column + 1):
                 ws_sum.cell(row=r, column=c).alignment = body_alignment
-        auto_fit_columns(ws_sum, max_width=80)
+        auto_fit_columns(ws_sum, max_width=95)
+        # Make Issue/Resolution columns wider
+        if ws_sum.max_column >= 3:
+            ws_sum.column_dimensions[get_column_letter(3)].width = 55
+        if ws_sum.max_column >= 8:
+            ws_sum.column_dimensions[get_column_letter(8)].width = 55
 
         # Detail sheet styling
         for name in wb.sheetnames:
@@ -853,7 +1117,7 @@ if start_btn and supplier_file:
     structured_issues.extend(cut_issues)
     structured_issues.extend(price_issues)
 
-    excel_buffer = build_excel_report(structured_issues)
+    excel_buffer = build_excel_report(structured_issues, df=df)
 
     email_body = build_email_body(
         supplier_name=supplier_name,
