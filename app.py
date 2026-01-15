@@ -296,7 +296,21 @@ def find_missing_cut_grade(df):
         return issues, 0
 
     col = cut_cols[0]
+
+    def is_round_shape(shape_value):
+        key = validator.normalize_value_key(shape_value)
+        if not key:
+            return False
+        # Common variants: "Round", "Round Brilliant", "RB", "RD"
+        return key.startswith("round") or key in {"rb", "rd"}
+
     for idx, row in df.iterrows():
+        # Cut grade is mandatory only for Round stones.
+        if "shape" not in df.columns or validator.is_empty_value(row.get("shape", None)):
+            continue
+        if not is_round_shape(row.get("shape", None)):
+            continue
+
         stock = row.get("stock_num", None)
         if validator.is_empty_value(stock):
             stock = f"Row {idx + 2}"
