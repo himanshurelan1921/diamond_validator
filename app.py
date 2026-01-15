@@ -431,8 +431,10 @@ def build_excel_report(structured_issues, df=None):
     header_font = Font(bold=True, color="FFFFFF")
     header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     body_alignment = Alignment(vertical="top", wrap_text=True)
-    thin_side = Side(style="thin", color="D0D0D0")
+    # Darker border so it is clearly visible in Excel.
+    thin_side = Side(style="thin", color="000000")
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    bad_cell_fill = PatternFill("solid", fgColor="FFC7CE")  # Excel-like light red
 
     issue_type_fills = {
         "Missing Value": PatternFill("solid", fgColor="F8D7DA"),           # light red
@@ -578,6 +580,28 @@ def build_excel_report(structured_issues, df=None):
             "__sheet": None,
         })
         sr += 1
+
+        # Stock Number
+        m_cnt, inv_vals, inv_cnt = summarize_column("stock_num")
+        if m_cnt or inv_cnt:
+            parts = ["Stock Number:"]
+            if m_cnt:
+                parts.append(f"- Stock number is missing for {m_cnt} item(s) in your inventory file.")
+            if inv_vals:
+                parts.append(f"- We are receiving the value(s) {clip_list(sorted(inv_vals))} under this column which is not accepted.")
+            rows.append({
+                "Sr. No.": sr,
+                "Issue Column": col_letters_for({"stock_num"}),
+                "Issue": "\n".join(parts),
+                "Critical": "Yes",
+                "Impact": "Items will not be listed or searchable on the app",
+                "Link": "Go to sheet",
+                "Items Impacted": int(m_cnt + inv_cnt),
+                "Resolution": "Please provide unique Stock Number for all items.",
+                "Comments": "",
+                "__sheet": "1. Stock Number",
+            })
+            sr += 1
 
         # Shape
         m_cnt, inv_vals, inv_cnt = summarize_column("shape")
@@ -805,13 +829,48 @@ def build_excel_report(structured_issues, df=None):
         df_summary_out = df_summary.drop(columns=["__sheet"], errors="ignore")
         df_summary_out.to_excel(writer, sheet_name="Summary", index=False)
 
-        # Write detail sheets (only those with issues)
-        for sheet_name in sorted(issues_by_sheet.keys()):
-            if not issues_by_sheet[sheet_name]:
-                continue
-            safe_sheet_name = sanitize_sheet_name(sheet_name)
-            df_report = pd.DataFrame(issues_by_sheet[sheet_name]).drop(columns=["Category"], errors="ignore")
-            df_report.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+        # Write detail sheets as impacted inventory rows (full rows), with an 'issues' column.
+        # This makes it easy to see the full context of each problematic stone.
+        if df is not None and not df.empty:
+            def issue_to_data_idx(issue):
+                try:
+                    row_num = int(issue.get("Row"))
+                except Exception:
+                    return None
+                return row_num - 2  # data starts at Excel row 2
+
+            for sheet_name in sorted(issues_by_sheet.keys()):
+                if not issues_by_sheet[sheet_name]:
+                    continue
+
+                idxs = []
+                issues_by_idx = {}
+                for iss in issues_by_sheet[sheet_name]:
+                    di = issue_to_data_idx(iss)
+                    if di is None or di < 0 or di >= len(df):
+                        continue
+                    idxs.append(di)
+                    issues_by_idx.setdefault(di, []).append(iss)
+
+                idxs = sorted(set(idxs))
+                if not idxs:
+                    continue
+
+                safe_sheet_name = sanitize_sheet_name(sheet_name)
+                df_rows = df.iloc[idxs].copy()
+                df_rows.insert(0, "source_row", [i + 2 for i in idxs])
+
+                def issue_text(di):
+                    parts = []
+                    for iss in issues_by_idx.get(di, []):
+                        col = iss.get("Column")
+                        it = iss.get("Issue Type")
+                        det = iss.get("Details") or iss.get("Status") or ""
+                        parts.append(f"{it} [{col}]{(': ' + det) if det else ''}")
+                    return "\n".join(parts)
+
+                df_rows["issues"] = [issue_text(i) for i in idxs]
+                df_rows.to_excel(writer, sheet_name=safe_sheet_name, index=False)
 
         if not structured_issues:
             df_empty = pd.DataFrame(columns=["Stock No.", "Issue Type", "Column", "Value", "Details", "Row"])
@@ -860,6 +919,49 @@ def build_excel_report(structured_issues, df=None):
             if name in {"Summary", "No Issues Found"}:
                 continue
             style_table_sheet(wb[name])
+
+        # Highlight the specific bad cells in red (based on issues list)
+        if df is not None and not df.empty:
+            for sheet_name in sorted(issues_by_sheet.keys()):
+                safe_sheet_name = sanitize_sheet_name(sheet_name)
+                if safe_sheet_name not in wb.sheetnames:
+                    continue
+                if safe_sheet_name in {"Summary", "No Issues Found"}:
+                    continue
+
+                ws = wb[safe_sheet_name]
+                # Header -> column index
+                header_to_idx = {}
+                for c in range(1, ws.max_column + 1):
+                    hv = ws.cell(row=1, column=c).value
+                    if hv is None:
+                        continue
+                    header_to_idx[str(hv).strip().lower()] = c
+
+                src_col_idx = header_to_idx.get("source_row")
+                if not src_col_idx:
+                    continue
+
+                # Build a map: source_row_value -> worksheet row
+                row_lookup = {}
+                for r in range(2, ws.max_row + 1):
+                    row_lookup[ws.cell(row=r, column=src_col_idx).value] = r
+
+                for iss in issues_by_sheet[sheet_name]:
+                    try:
+                        source_row = int(iss.get("Row"))
+                    except Exception:
+                        continue
+                    ws_row = row_lookup.get(source_row)
+                    if not ws_row:
+                        continue
+                    col_key = (iss.get("Column") or "").strip().lower()
+                    if not col_key:
+                        continue
+                    cidx = header_to_idx.get(col_key)
+                    if not cidx:
+                        continue
+                    ws.cell(row=ws_row, column=cidx).fill = bad_cell_fill
 
         # "No Issues Found" styling
         if "No Issues Found" in wb.sheetnames:
