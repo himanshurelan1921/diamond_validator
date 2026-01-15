@@ -3,9 +3,12 @@ import pandas as pd
 import io
 import re
 import math
+import json
+import uuid
 from collections import Counter
 import validator
 import os
+import streamlit.components.v1 as components
 
 # ------------------------------------------------------------
 # STREAMLIT SETUP
@@ -45,6 +48,49 @@ st.markdown("""
 Upload your **supplier inventory file** to validate against the internal rule set.
 """)
 st.caption(f"Build: `{_get_build_info()}`")
+
+# ------------------------------------------------------------
+# UI HELPERS
+# ------------------------------------------------------------
+
+def render_copy_to_clipboard(text: str, button_label: str = "Copy email"):
+    """
+    Render a browser-side copy button using navigator.clipboard.
+    Falls back gracefully if clipboard access is blocked.
+    """
+    uid = uuid.uuid4().hex
+    safe_text = json.dumps(text or "")
+    components.html(
+        f"""
+        <div style="display:flex;align-items:center;gap:10px;margin:4px 0 10px 0;">
+          <button
+            id="copyBtn_{uid}"
+            style="
+              background:#0f62fe;color:white;border:none;border-radius:6px;
+              padding:8px 12px;cursor:pointer;font-weight:600;
+            "
+          >
+            {button_label}
+          </button>
+          <span id="copyStatus_{uid}" style="font-size:0.9rem;color:#444;"></span>
+        </div>
+        <script>
+          const text_{uid} = {safe_text};
+          const btn_{uid} = document.getElementById("copyBtn_{uid}");
+          const status_{uid} = document.getElementById("copyStatus_{uid}");
+          btn_{uid}.addEventListener("click", async () => {{
+            try {{
+              await navigator.clipboard.writeText(text_{uid});
+              status_{uid}.textContent = "Copied to clipboard.";
+              setTimeout(() => status_{uid}.textContent = "", 2500);
+            }} catch (e) {{
+              status_{uid}.textContent = "Copy failed (browser blocked). Please select and copy the text below.";
+            }}
+          }});
+        </script>
+        """,
+        height=60,
+    )
 
 # ------------------------------------------------------------
 # HELPERS
@@ -748,8 +794,6 @@ if st.session_state.validation_complete and st.session_state.validation_results:
 
     st.subheader("📧 Email Summary")
 
+    render_copy_to_clipboard(results["email_body"], button_label="Copy email to clipboard")
     st.text_area("Email to Supplier", value=results['email_body'], height=400, key="email_text", label_visibility="collapsed")
-    
-    if st.button("📋 Copy Email to Clipboard", key="copy_email_button", type="secondary"):
-        st.info("✅ Email text is displayed above. Please select all (Ctrl+A or Cmd+A) and copy (Ctrl+C or Cmd+C)")
-        st.code(results['email_body'], language=None)
+
