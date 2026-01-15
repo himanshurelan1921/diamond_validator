@@ -429,8 +429,8 @@ def build_excel_report(structured_issues, df=None):
     # -----------------------------
     header_fill = PatternFill("solid", fgColor="1F4E79")
     header_font = Font(bold=True, color="FFFFFF")
-    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    body_alignment = Alignment(vertical="top", wrap_text=True)
+    header_alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    body_alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     # Darker border so it is clearly visible in Excel.
     thin_side = Side(style="thin", color="000000")
     thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
