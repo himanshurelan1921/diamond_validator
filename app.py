@@ -566,20 +566,19 @@ def build_excel_report(structured_issues, df=None):
         """
         rows = []
         sr = 1
-        total_items = len(df) if df is not None else ""
-        rows.append({
-            "Sr. No.": sr,
-            "Issue Column": "",
-            "Issue": "Total Items",
-            "Critical": "",
-            "Impact": "",
-            "Link": "",
-            "Items Impacted": total_items,
-            "Resolution": "",
-            "Comments": "",
-            "__sheet": None,
-        })
-        sr += 1
+        def compute_total_items():
+            if df is None:
+                return ""
+            if getattr(df, "empty", True):
+                return 0
+            # Ignore fully blank rows (common in exported XLSX)
+            total = 0
+            for _, r in df.iterrows():
+                if any(not validator.is_empty_value(v) for v in r.values):
+                    total += 1
+            return total
+
+        total_items = compute_total_items()
 
         # Stock Number
         m_cnt, inv_vals, inv_cnt = summarize_column("stock_num")
@@ -806,6 +805,20 @@ def build_excel_report(structured_issues, df=None):
                 "__sheet": "10. Other Issues / Cut Grade",
             })
             sr += 1
+
+        # Total Items (move to last row as requested)
+        rows.append({
+            "Sr. No.": sr,
+            "Issue Column": "",
+            "Issue": "Total Items",
+            "Critical": "",
+            "Impact": "",
+            "Link": "",
+            "Items Impacted": total_items,
+            "Resolution": "",
+            "Comments": "",
+            "__sheet": None,
+        })
 
         return rows
 
