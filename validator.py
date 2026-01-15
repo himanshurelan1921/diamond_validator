@@ -114,7 +114,21 @@ def detect_best_excel_layout(file_bytes, header_map=None, sheet_name=None, max_h
     - trying header rows 0..max_header_row-1
     - picking the combo with the most header_map matches, then fewest Unnamed columns.
     """
-    xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+    if not file_bytes:
+        raise ValueError("The uploaded XLSX file is empty.")
+
+    try:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+    except Exception as e:
+        raise ValueError(
+            "Unable to read the uploaded Excel file. Please ensure it is a valid, non-password-protected `.xlsx` "
+            "(not `.xls` or a renamed non-Excel file)."
+        ) from e
+
+    if not getattr(xls, "sheet_names", None):
+        raise ValueError(
+            "This Excel workbook contains 0 worksheets. Please re-export or resave it as a standard `.xlsx` file."
+        )
     sheets = [sheet_name] if sheet_name else list(xls.sheet_names)
     header_rows = range(0, max_header_row)
 
@@ -153,24 +167,33 @@ def load_supplier_bytes(file_bytes, filename, header_map=None, sheet_name=None):
         return df, meta
 
     if ext == "xlsx":
-        best_sheet, best_header = detect_best_excel_layout(
-            file_bytes=file_bytes,
-            header_map=header_map,
-            sheet_name=sheet_name,
-        )
-        meta["sheet_name"] = best_sheet
-        meta["header_row"] = best_header
-        df = pd.read_excel(
-            io.BytesIO(file_bytes),
-            sheet_name=best_sheet,
-            header=best_header,
-            engine="openpyxl",
-        )
-        return df, meta
+        try:
+            best_sheet, best_header = detect_best_excel_layout(
+                file_bytes=file_bytes,
+                header_map=header_map,
+                sheet_name=sheet_name,
+            )
+            meta["sheet_name"] = best_sheet
+            meta["header_row"] = best_header
+            df = pd.read_excel(
+                io.BytesIO(file_bytes),
+                sheet_name=best_sheet,
+                header=best_header,
+                engine="openpyxl",
+            )
+            return df, meta
+        except Exception as e:
+            raise ValueError(
+                "Failed to load the uploaded `.xlsx`. "
+                "Common causes: corrupted file, password protection, or the file is not a real `.xlsx` workbook."
+            ) from e
 
     # Fallback: let pandas attempt.
-    df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
-    return df, meta
+    try:
+        df = pd.read_excel(io.BytesIO(file_bytes), engine="openpyxl")
+        return df, meta
+    except Exception as e:
+        raise ValueError("Failed to load the uploaded file.") from e
 
 
 # ------------------------------------------------------------
