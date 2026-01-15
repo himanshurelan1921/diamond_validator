@@ -583,35 +583,9 @@ def build_excel_report(structured_issues, df=None):
         """
         rows = []
         sr = 1
-        def compute_total_items():
-            if df is None:
-                return ""
-            if getattr(df, "empty", True):
-                return 0
-            # Ignore fully blank rows (common in exported XLSX)
-            total = 0
-            for _, r in df.iterrows():
-                if any(not validator.is_empty_value(v) for v in r.values):
-                    total += 1
-            return total
-
-        total_items = compute_total_items()
-        def compute_total_impacted_items():
-            impacted = set()
-            max_row = (len(df) + 1) if df is not None and not getattr(df, "empty", True) else None
-            for issue in structured_issues:
-                try:
-                    r = int(issue.get("Row"))
-                except Exception:
-                    continue
-                if r < 2:
-                    continue
-                if max_row is not None and r > max_row:
-                    continue
-                impacted.add(r)
-            return len(impacted)
-
-        impacted_items = compute_total_impacted_items()
+        # Note: we intentionally do not include a "Total" footer row in Summary,
+        # since supplier files may include blank lines and multiple issues per row
+        # which can lead to confusion about totals.
 
         # Stock Number
         m_cnt, inv_vals, inv_cnt = summarize_column("stock_num")
@@ -876,20 +850,6 @@ def build_excel_report(structured_issues, df=None):
                 "__sheet": other_sheet,
             })
             sr += 1
-
-        # Totals (footer)
-        rows.append({
-            "Sr. No.": sr,
-            "Issue Column": "",
-            "Issue": "Total Impacted Items",
-            "Critical": "",
-            "Impact": "",
-            "Link": "",
-            "Items Impacted": impacted_items,
-            "Resolution": "",
-            "Comments": f"Total items in file: {total_items}",
-            "__sheet": None,
-        })
 
         return rows
 
