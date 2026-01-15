@@ -386,6 +386,10 @@ def build_price_mismatch_issues(df):
     return issues, count
 
 def build_excel_report(structured_issues):
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
     section_map = {
         "stock_num": "1. Stock Number",
         "shape": "2. Shape",
@@ -421,18 +425,147 @@ def build_excel_report(structured_issues):
 
         issues_by_sheet[sheet_name].append(issue)
 
+    # -----------------------------
+    # Helper formatting functions
+    # -----------------------------
+    header_fill = PatternFill("solid", fgColor="1F4E79")
+    header_font = Font(bold=True, color="FFFFFF")
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    body_alignment = Alignment(vertical="top", wrap_text=True)
+
+    issue_type_fills = {
+        "Missing Value": PatternFill("solid", fgColor="F8D7DA"),           # light red
+        "Missing URL": PatternFill("solid", fgColor="F8D7DA"),             # light red
+        "Invalid Value": PatternFill("solid", fgColor="FFF3CD"),           # light yellow
+        "Invalid Numeric Value": PatternFill("solid", fgColor="FFF3CD"),   # light yellow
+        "URL Error": PatternFill("solid", fgColor="D1ECF1"),               # light blue
+        "Price Mismatch": PatternFill("solid", fgColor="E2D9F3"),           # light purple
+    }
+
+    def auto_fit_columns(ws, max_width=65):
+        for col_idx, col_cells in enumerate(ws.columns, start=1):
+            max_len = 0
+            for cell in col_cells:
+                val = cell.value
+                if val is None:
+                    continue
+                s = str(val)
+                if len(s) > max_len:
+                    max_len = len(s)
+            width = min(max(10, max_len + 2), max_width)
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    def style_table_sheet(ws):
+        # Header styling
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        ws.row_dimensions[1].height = 22
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+
+        # Body styling + row color coding
+        issue_type_col = None
+        for i, cell in enumerate(ws[1], start=1):
+            if str(cell.value).strip().lower() == "issue type":
+                issue_type_col = i
+                break
+
+        for r in range(2, ws.max_row + 1):
+            issue_type = None
+            if issue_type_col:
+                issue_type = ws.cell(row=r, column=issue_type_col).value
+            fill = issue_type_fills.get(str(issue_type), None)
+            for c in range(1, ws.max_column + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.alignment = body_alignment
+                if fill:
+                    cell.fill = fill
+                elif r % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor="F7F7F7")  # zebra striping
+
+        auto_fit_columns(ws)
+
+        # Add a nice table style (Excel-native)
+        try:
+            table_name = re.sub(r"[^A-Za-z0-9_]", "_", ws.title)[:30]
+            tab = Table(displayName=f"T_{table_name}", ref=ws.dimensions)
+            tab.tableStyleInfo = TableStyleInfo(
+                name="TableStyleMedium9",
+                showFirstColumn=False,
+                showLastColumn=False,
+                showRowStripes=False,  # we do our own striping
+                showColumnStripes=False,
+            )
+            ws.add_table(tab)
+        except Exception:
+            pass
+
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        # Summary sheet first
+        total_issues = len(structured_issues)
+        section_counts = {k: len(v) for k, v in issues_by_sheet.items() if v}
+        issue_type_counts = Counter([i.get("Issue Type", "Unknown") for i in structured_issues])
+
+        summary_rows = []
+        summary_rows.append(("Total issues", total_issues))
+        summary_rows.append(("", ""))
+        summary_rows.append(("By section", "Count"))
+        for sec in sorted(section_counts.keys()):
+            summary_rows.append((sec, section_counts[sec]))
+        summary_rows.append(("", ""))
+        summary_rows.append(("By issue type", "Count"))
+        for it in sorted(issue_type_counts.keys()):
+            summary_rows.append((it, issue_type_counts[it]))
+
+        df_summary = pd.DataFrame(summary_rows, columns=["Summary", "Value"])
+        df_summary.to_excel(writer, sheet_name="Summary", index=False)
+
+        # Write detail sheets (only those with issues)
         for sheet_name in sorted(issues_by_sheet.keys()):
+            if not issues_by_sheet[sheet_name]:
+                continue
             safe_sheet_name = sanitize_sheet_name(sheet_name)
-            
-            if issues_by_sheet[sheet_name]:
-                df_report = pd.DataFrame(issues_by_sheet[sheet_name]).drop(columns=["Category"], errors='ignore')
-                df_report.to_excel(writer, sheet_name=safe_sheet_name, index=False)
-            
+            df_report = pd.DataFrame(issues_by_sheet[sheet_name]).drop(columns=["Category"], errors="ignore")
+            df_report.to_excel(writer, sheet_name=safe_sheet_name, index=False)
+
         if not structured_issues:
             df_empty = pd.DataFrame(columns=["Stock No.", "Issue Type", "Column", "Value", "Details", "Row"])
             df_empty.to_excel(writer, sheet_name="No Issues Found", index=False)
+
+        # Apply formatting
+        wb = writer.book
+        # Summary styling
+        ws_sum = wb["Summary"]
+        ws_sum.freeze_panes = "A2"
+        ws_sum.row_dimensions[1].height = 22
+        for cell in ws_sum[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        for r in range(2, ws_sum.max_row + 1):
+            for c in range(1, ws_sum.max_column + 1):
+                ws_sum.cell(row=r, column=c).alignment = body_alignment
+        auto_fit_columns(ws_sum, max_width=80)
+
+        # Detail sheet styling
+        for name in wb.sheetnames:
+            if name in {"Summary", "No Issues Found"}:
+                continue
+            style_table_sheet(wb[name])
+
+        # "No Issues Found" styling
+        if "No Issues Found" in wb.sheetnames:
+            ws = wb["No Issues Found"]
+            ws.freeze_panes = "A2"
+            ws.row_dimensions[1].height = 22
+            for cell in ws[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = header_alignment
+            auto_fit_columns(ws)
                 
     buffer.seek(0)
     return buffer
