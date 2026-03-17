@@ -140,6 +140,16 @@ def find_canonical_col(df, candidates):
             return c
     return None
 
+def is_weight_like_column(col_name):
+    """
+    Identify likely weight/carat columns robustly across header variations.
+    """
+    n = validator.normalize_header_name(col_name) or ""
+    if n in {"carat", "weight", "carat_weight", "size"}:
+        return True
+    # Handle common variants like carat_wt, total_weight, stone_carat, etc.
+    return ("carat" in n) or ("weight" in n)
+
 def sanitize_sheet_name(name):
     name = re.sub(r'[\\/?*\[\]:]', '', name)
     return name[:31]
@@ -430,10 +440,7 @@ def find_high_carat_weight_issues(df, threshold=75):
     """
     issues = []
     count = 0
-    weight_cols = [
-        c for c in df.columns
-        if validator.normalize_header_name(c) in {"carat", "weight", "carat_weight", "size"}
-    ]
+    weight_cols = [c for c in df.columns if is_weight_like_column(c)]
     if not weight_cols:
         return issues, 0
 
@@ -526,6 +533,8 @@ def build_excel_report(structured_issues, df=None, high_carat_count=0, high_cara
         
         if issue["Issue Type"] == "Price Mismatch":
              sheet_name = "9. Price"
+        elif issue["Issue Type"] == "Carat Above Limit":
+             sheet_name = "3. Weight"
 
         issues_by_sheet[sheet_name].append(issue)
 
@@ -700,12 +709,19 @@ def build_excel_report(structured_issues, df=None, high_carat_count=0, high_cara
 
         # Weight / Carat (critical)
         weight_keys = {"size", "carat", "weight", "carat_weight"}
+        weight_issue_cols = set(weight_keys)
+        if df is not None and not getattr(df, "empty", True):
+            for c in df.columns:
+                if is_weight_like_column(c):
+                    n = validator.normalize_header_name(c)
+                    if n:
+                        weight_issue_cols.add(n)
         w_missing = 0
         w_invalid = 0
         w_invalid_vals = set()
         for issue in structured_issues:
             col = validator.normalize_header_name(issue.get("Column"))
-            if col not in weight_keys:
+            if not (col in weight_keys or is_weight_like_column(col)):
                 continue
             itype = issue.get("Issue Type") or ""
             if itype == "Missing Value":
@@ -727,7 +743,7 @@ def build_excel_report(structured_issues, df=None, high_carat_count=0, high_cara
                 parts.append(f"- Carat/Weight is above {high_carat_threshold} for {w_high} item(s).")
             rows.append({
                 "Sr. No.": sr,
-                "Issue Column": col_letters_for(weight_keys),
+                "Issue Column": col_letters_for(weight_issue_cols),
                 "Issue": "\n".join(parts),
                 "Critical": "Yes",
                 "Impact": "Items will not be listed or searchable on the app",
@@ -1160,9 +1176,9 @@ def build_email_body(
         section_num += 1
 
     weight_col = None
-    for cand in ["carat", "weight", "carat_weight", "size"]:
-        if cand in missing_by_col or cand in invalid_by_col:
-            weight_col = cand
+    for key in list(missing_by_col.keys()) + list(invalid_by_col.keys()):
+        if is_weight_like_column(key):
+            weight_col = key
             break
 
     weight_issue_present = (
