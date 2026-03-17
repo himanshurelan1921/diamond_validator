@@ -423,7 +423,57 @@ def build_price_mismatch_issues(df):
 
     return issues, count
 
-def build_excel_report(structured_issues, df=None):
+def find_high_carat_weight_issues(df, threshold=75):
+    """
+    Flag rows where parsed carat/weight value is above the allowed threshold.
+    Returns one issue per row (first offending weight-like column).
+    """
+    issues = []
+    count = 0
+    weight_cols = [
+        c for c in df.columns
+        if validator.normalize_header_name(c) in {"carat", "weight", "carat_weight", "size"}
+    ]
+    if not weight_cols:
+        return issues, 0
+
+    def to_float(x):
+        if validator.is_empty_value(x):
+            return None
+        s = str(x).strip().replace(",", "")
+        s = re.sub(r"[^\d.\-]", "", s)
+        if not s or s in {"-", ".", "-."}:
+            return None
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    for idx, row in df.iterrows():
+        stock = row.get("stock_num", None)
+        if validator.is_empty_value(stock):
+            stock = f"Row {idx + 2}"
+
+        for col in weight_cols:
+            parsed = to_float(row.get(col, None))
+            if parsed is None:
+                continue
+            if parsed > threshold:
+                count += 1
+                issues.append({
+                    "Category": "Invalid Value",
+                    "Stock No.": stock,
+                    "Issue Type": "Carat Above Limit",
+                    "Column": col,
+                    "Value": row.get(col, None),
+                    "Details": f"Carat/Weight is above {threshold}",
+                    "Row": idx + 2,
+                })
+                break
+
+    return issues, count
+
+def build_excel_report(structured_issues, df=None, high_carat_count=0, high_carat_threshold=75):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
 
@@ -496,6 +546,7 @@ def build_excel_report(structured_issues, df=None):
         "Missing URL": PatternFill("solid", fgColor="F8D7DA"),             # light red
         "Invalid Value": PatternFill("solid", fgColor="FFF3CD"),           # light yellow
         "Invalid Numeric Value": PatternFill("solid", fgColor="FFF3CD"),   # light yellow
+        "Carat Above Limit": PatternFill("solid", fgColor="FFF3CD"),       # light yellow
         "URL Error": PatternFill("solid", fgColor="D1ECF1"),               # light blue
         "Price Mismatch": PatternFill("solid", fgColor="E2D9F3"),           # light purple
     }
@@ -665,12 +716,15 @@ def build_excel_report(structured_issues, df=None):
                 if v is not None and str(v).strip() != "":
                     w_invalid_vals.add(str(v).strip())
 
-        if w_missing or w_invalid:
+        w_high = int(high_carat_count or 0)
+        if w_missing or w_invalid or w_high:
             parts = ["Weight:"]
             if w_missing:
                 parts.append(f"- The value is missing for {w_missing} item(s) in your inventory file.")
             if w_invalid_vals:
                 parts.append(f"- We are receiving the value(s) {clip_list(sorted(w_invalid_vals))} under this column which is not accepted.")
+            if w_high:
+                parts.append(f"- Carat/Weight is above {high_carat_threshold} for {w_high} item(s).")
             rows.append({
                 "Sr. No.": sr,
                 "Issue Column": col_letters_for(weight_keys),
@@ -678,8 +732,8 @@ def build_excel_report(structured_issues, df=None):
                 "Critical": "Yes",
                 "Impact": "Items will not be listed or searchable on the app",
                 "Link": "Go to sheet",
-                "Items Impacted": int(w_missing + w_invalid),
-                "Resolution": "Please provide correct Weight/Carat values (> 00).",
+                "Items Impacted": int(w_missing + w_invalid + w_high),
+                "Resolution": f"Please provide correct Weight/Carat values (> 0 and <= {high_carat_threshold}).",
                 "Comments": "",
                 "__sheet": "3. Weight",
             })
@@ -1075,6 +1129,8 @@ def build_email_body(
     cut_missing_count,
     price_mismatch_count,
     missing_stock_count,
+    high_carat_count,
+    high_carat_threshold=75,
 ):
     lines = []
     lines.append(f"Hi {supplier_name},")
@@ -1109,12 +1165,18 @@ def build_email_body(
             weight_col = cand
             break
 
-    if weight_col and (missing_by_col.get(weight_col) or invalid_by_col.get(weight_col)):
+    weight_issue_present = (
+        (weight_col and (missing_by_col.get(weight_col) or invalid_by_col.get(weight_col)))
+        or high_carat_count
+    )
+    if weight_issue_present:
         lines.append(f"{section_num}. Weight")
-        if missing_by_col.get(weight_col):
+        if weight_col and missing_by_col.get(weight_col):
             lines.append(f"- Weight ({weight_col}) is missing for {missing_by_col[weight_col]} item(s).")
-        if invalid_by_col.get(weight_col):
+        if weight_col and invalid_by_col.get(weight_col):
             lines.append(f"- Weight ({weight_col}) has invalid values (zero, negative, or not in accepted format) for {invalid_by_col[weight_col]} item(s).")
+        if high_carat_count:
+            lines.append(f"- Carat/Weight is above {high_carat_threshold} for {high_carat_count} item(s).")
         lines.append("")
         section_num += 1
 
@@ -1359,10 +1421,11 @@ if start_btn and supplier_file:
     url_issues_struct, url_counts = parse_url_issue_strings(url_strings, df)
     progress.progress(75)
 
-    run_status.update(label="Checking cut grade and price consistency…", state="running")
-    status.text("Checking cut grade and price consistency…")
+    run_status.update(label="Checking cut grade, price consistency, and carat limits…", state="running")
+    status.text("Checking cut grade, price consistency, and carat limits…")
     cut_issues, cut_missing_count = find_missing_cut_grade(df)
     price_issues, price_mismatch_count = build_price_mismatch_issues(df)
+    high_carat_issues, high_carat_count = find_high_carat_weight_issues(df, threshold=75)
     progress.progress(90)
 
     run_status.update(label="Generating report + email draft…", state="running")
@@ -1374,8 +1437,14 @@ if start_btn and supplier_file:
     structured_issues.extend(url_issues_struct)
     structured_issues.extend(cut_issues)
     structured_issues.extend(price_issues)
+    structured_issues.extend(high_carat_issues)
 
-    excel_buffer = build_excel_report(structured_issues, df=df)
+    excel_buffer = build_excel_report(
+        structured_issues,
+        df=df,
+        high_carat_count=high_carat_count,
+        high_carat_threshold=75,
+    )
 
     email_body = build_email_body(
         supplier_name=supplier_name,
@@ -1387,6 +1456,8 @@ if start_btn and supplier_file:
         cut_missing_count=cut_missing_count,
         price_mismatch_count=price_mismatch_count,
         missing_stock_count=missing_stock_count,
+        high_carat_count=high_carat_count,
+        high_carat_threshold=75,
     )
     
     progress.progress(100)
@@ -1412,6 +1483,7 @@ if start_btn and supplier_file:
         'cut_missing_count': cut_missing_count,
         'price_mismatch_count': price_mismatch_count,
         'missing_stock_count': missing_stock_count,
+        'high_carat_count': high_carat_count,
         'excel_buffer': excel_buffer,
         'supplier_name': supplier_name,
     }
