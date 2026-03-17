@@ -145,10 +145,20 @@ def is_weight_like_column(col_name):
     Identify likely weight/carat columns robustly across header variations.
     """
     n = validator.normalize_header_name(col_name) or ""
-    if n in {"carat", "weight", "carat_weight", "size"}:
+    if n in {
+        "carat", "weight", "carat_weight", "size",
+        "wt", "wgt", "ct", "cts", "carats", "carat_wt", "stone_weight",
+    }:
         return True
     # Handle common variants like carat_wt, total_weight, stone_carat, etc.
-    return ("carat" in n) or ("weight" in n)
+    return (
+        ("carat" in n)
+        or ("weight" in n)
+        or n.endswith("_wt")
+        or n.endswith("_wgt")
+        or n.endswith("_ct")
+        or n.endswith("_cts")
+    )
 
 def sanitize_sheet_name(name):
     name = re.sub(r'[\\/?*\[\]:]', '', name)
@@ -1529,6 +1539,8 @@ if st.session_state.validation_complete and st.session_state.validation_results:
     if results['numeric_invalid_strings']:
         st.error("❌ Invalid Numeric Values (Zero/Negative)")
         st.write(results['numeric_invalid_strings'])
+    if results.get('high_carat_count', 0):
+        st.error(f"❌ Weight Above Limit: {results['high_carat_count']} item(s) above 75 carat/weight")
 
     if results['invalid_strings']:
         st.error("❌ Invalid Values Found")
