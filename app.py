@@ -145,20 +145,44 @@ def is_weight_like_column(col_name):
     Identify likely weight/carat columns robustly across header variations.
     """
     n = validator.normalize_header_name(col_name) or ""
+    if not n:
+        return False
+
+    # Explicit non-weight, price-like fields that can contain "ct" tokens.
+    if n in {
+        "price_per_carat",
+        "price_per_caret",
+        "price_per_carat_memo",
+        "price_per_ct",
+        "ppc",
+    }:
+        return False
+    if any(x in n for x in {"price", "rate", "amount", "ppc"}):
+        return False
+    if "per_carat" in n or "per_ct" in n:
+        return False
+
     if n in {
         "carat", "weight", "carat_weight", "size",
         "wt", "wgt", "ct", "cts", "carats", "carat_wt", "stone_weight",
     }:
         return True
-    # Handle common variants like carat_wt, total_weight, stone_carat, etc.
-    return (
-        ("carat" in n)
-        or ("weight" in n)
-        or n.endswith("_wt")
-        or n.endswith("_wgt")
-        or n.endswith("_ct")
-        or n.endswith("_cts")
-    )
+
+    # Common semantic matches.
+    if ("carat" in n) or ("weight" in n):
+        return True
+
+    tokens = {t for t in n.split("_") if t}
+
+    # Handle shorthand tokens only in stone/size contexts (avoid "s_ct", "p_ct", etc.).
+    if n.endswith("_wt") or n.endswith("_wgt"):
+        return True
+    if {"ct", "cts", "crt"} & tokens:
+        if tokens & {"stone", "diamond", "size", "carat", "weight", "total"}:
+            return True
+    if {"wt", "wgt"} & tokens:
+        return True
+    return False
 
 def sanitize_sheet_name(name):
     name = re.sub(r'[\\/?*\[\]:]', '', name)
@@ -450,8 +474,12 @@ def find_high_carat_weight_issues(df, threshold=75):
     """
     issues = []
     count = 0
-    weight_cols = [c for c in df.columns if is_weight_like_column(c)]
-    if not weight_cols:
+    weight_col_positions = [
+        (idx, col_name)
+        for idx, col_name in enumerate(list(df.columns))
+        if is_weight_like_column(col_name)
+    ]
+    if not weight_col_positions:
         return issues, 0
 
     def to_float(x):
@@ -466,13 +494,21 @@ def find_high_carat_weight_issues(df, threshold=75):
         except Exception:
             return None
 
-    for idx, row in df.iterrows():
-        stock = row.get("stock_num", None)
-        if validator.is_empty_value(stock):
-            stock = f"Row {idx + 2}"
+    # Resolve stock_num by position to safely handle duplicate column names.
+    stock_positions = [i for i, c in enumerate(list(df.columns)) if c == "stock_num"]
 
-        for col in weight_cols:
-            parsed = to_float(row.get(col, None))
+    for row_idx in range(len(df)):
+        stock = None
+        for sp in stock_positions:
+            candidate = df.iat[row_idx, sp]
+            if not validator.is_empty_value(candidate):
+                stock = candidate
+                break
+        if validator.is_empty_value(stock):
+            stock = f"Row {row_idx + 2}"
+
+        for col_idx, col_name in weight_col_positions:
+            parsed = to_float(df.iat[row_idx, col_idx])
             if parsed is None:
                 continue
             if parsed > threshold:
@@ -481,10 +517,10 @@ def find_high_carat_weight_issues(df, threshold=75):
                     "Category": "Invalid Value",
                     "Stock No.": stock,
                     "Issue Type": "Carat Above Limit",
-                    "Column": col,
-                    "Value": row.get(col, None),
+                    "Column": col_name,
+                    "Value": df.iat[row_idx, col_idx],
                     "Details": f"Carat/Weight is above {threshold}",
-                    "Row": idx + 2,
+                    "Row": row_idx + 2,
                 })
                 break
 
